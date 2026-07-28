@@ -857,6 +857,7 @@ public class ExpressionUtil {
             return new UnboundPredicate<>(
                 pred.op(), pred.term(), (T) uuidLit.withSignedComparator());
           }
+
           return pred;
 
         case IN:
@@ -870,6 +871,7 @@ public class ExpressionUtil {
                     .collect(Collectors.toList());
             return new UnboundPredicate<>(pred.op(), pred.term(), transformedValues);
           }
+
           return pred;
 
         default:
