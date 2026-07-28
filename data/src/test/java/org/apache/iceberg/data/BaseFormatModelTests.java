@@ -39,6 +39,7 @@ import java.util.UUID;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import org.apache.iceberg.ContentFile;
 import org.apache.iceberg.DataFile;
@@ -59,7 +60,11 @@ import org.apache.iceberg.deletes.PositionDelete;
 import org.apache.iceberg.deletes.PositionDeleteWriter;
 import org.apache.iceberg.encryption.EncryptedFiles;
 import org.apache.iceberg.encryption.EncryptedOutputFile;
+import org.apache.iceberg.encryption.EncryptingFileIO;
 import org.apache.iceberg.encryption.EncryptionKeyMetadata;
+import org.apache.iceberg.encryption.EncryptionManager;
+import org.apache.iceberg.encryption.EncryptionTestHelpers;
+import org.apache.iceberg.encryption.NativeEncryptionKeyMetadata;
 import org.apache.iceberg.exceptions.AlreadyExistsException;
 import org.apache.iceberg.exceptions.NotFoundException;
 import org.apache.iceberg.exceptions.ValidationException;
@@ -68,6 +73,7 @@ import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.expressions.Literal;
 import org.apache.iceberg.formats.FileWriterBuilder;
 import org.apache.iceberg.formats.FormatModelRegistry;
+import org.apache.iceberg.formats.ReadBuilder;
 import org.apache.iceberg.inmemory.InMemoryFileIO;
 import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.io.DataWriter;
@@ -79,6 +85,7 @@ import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
+import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.types.Comparators;
 import org.apache.iceberg.types.Conversions;
 import org.apache.iceberg.types.Type;
@@ -176,6 +183,8 @@ public abstract class BaseFormatModelTests<T> {
   static final String FEATURE_REUSE_CONTAINERS = "reuseContainers";
   static final String FEATURE_COLUMN_LEVEL_METRICS = "columnLevelMetrics";
   static final String FEATURE_COLUMN_METRICS_TRUNCATE_BINARY = "columnMetricsTruncateBinary";
+  static final String FEATURE_NATIVE_ENCRYPTION = "nativeEncryption";
+  static final String FEATURE_AES_STREAM_ENCRYPTION = "aesStreamEncryption";
 
   private static final Map<FileFormat, String[]> MISSING_FEATURES =
       Map.of(
@@ -185,12 +194,19 @@ public abstract class BaseFormatModelTests<T> {
             FEATURE_CASE_SENSITIVE,
             FEATURE_SPLIT,
             FEATURE_COLUMN_LEVEL_METRICS,
-            FEATURE_COLUMN_METRICS_TRUNCATE_BINARY
+            FEATURE_COLUMN_METRICS_TRUNCATE_BINARY,
+            FEATURE_NATIVE_ENCRYPTION
           },
           FileFormat.ORC,
           new String[] {
-            FEATURE_REUSE_CONTAINERS, FEATURE_COLUMN_METRICS_TRUNCATE_BINARY, FEATURE_READER_DEFAULT
-          });
+            FEATURE_REUSE_CONTAINERS,
+            FEATURE_COLUMN_METRICS_TRUNCATE_BINARY,
+            FEATURE_READER_DEFAULT,
+            FEATURE_AES_STREAM_ENCRYPTION,
+            FEATURE_NATIVE_ENCRYPTION
+          },
+          FileFormat.PARQUET,
+          new String[] {FEATURE_AES_STREAM_ENCRYPTION});
 
   private InMemoryFileIO fileIO;
   private EncryptedOutputFile encryptedFile;
@@ -227,7 +243,7 @@ public abstract class BaseFormatModelTests<T> {
     Schema schema = supportedSchema(dataGenerator);
     List<Record> genericRecords = project(dataGenerator.generateRecords(), schema);
     List<T> engineRecords = convertToEngineRecords(genericRecords, schema);
-    writeEngineRecords(fileFormat, schema, engineRecords);
+    writeEngineRecords(fileFormat, schema, engineRecords, engineSchema(schema));
     readAndAssertGenericRecords(fileFormat, schema, genericRecords);
   }
 
@@ -668,46 +684,404 @@ public abstract class BaseFormatModelTests<T> {
 
   @ParameterizedTest
   @FieldSource("FILE_FORMATS")
-  void testReaderSchemaEvolutionNewColumnWithDefault(FileFormat fileFormat) throws IOException {
-
+  void testDefaultValues(FileFormat fileFormat) throws IOException {
     assumeSupports(fileFormat, FEATURE_READER_DEFAULT);
-    DataGenerator dataGenerator = new DataGenerators.DefaultSchema();
-    Schema writeSchema = dataGenerator.schema();
 
-    List<Record> genericRecords = dataGenerator.generateRecords();
+    Types.NestedField idField = Types.NestedField.required(1, "id", Types.LongType.get());
+
+    Types.NestedField dataField =
+        Types.NestedField.optional("data")
+            .withId(2)
+            .ofType(Types.StringType.get())
+            .withInitialDefault(Literal.of("wrong!"))
+            .withDoc("Should not produce default value")
+            .build();
+
+    Schema writeSchema = new Schema(idField, dataField);
+
+    List<Record> genericRecords = RandomGenericData.generate(writeSchema, 10, 1L);
     writeGenericRecords(fileFormat, writeSchema, genericRecords);
 
-    String defaultStringValue = "default_value";
-    int defaultIntValue = 42;
+    Schema expectedSchema =
+        new Schema(
+            idField,
+            dataField,
+            Types.NestedField.required("missing_str")
+                .withId(6)
+                .ofType(Types.StringType.get())
+                .withInitialDefault(Literal.of("orange"))
+                .build(),
+            Types.NestedField.optional("missing_int")
+                .withId(7)
+                .ofType(Types.IntegerType.get())
+                .withInitialDefault(Literal.of(34))
+                .build());
 
-    int maxFieldId =
-        writeSchema.columns().stream().mapToInt(Types.NestedField::fieldId).max().orElse(0);
-
-    List<Types.NestedField> evolvedColumns = Lists.newArrayList(writeSchema.columns());
-    evolvedColumns.add(
-        Types.NestedField.required("col_f")
-            .withId(maxFieldId + 1)
-            .ofType(Types.StringType.get())
-            .withInitialDefault(Literal.of(defaultStringValue))
-            .build());
-    evolvedColumns.add(
-        Types.NestedField.optional("col_g")
-            .withId(maxFieldId + 2)
-            .ofType(Types.IntegerType.get())
-            .withInitialDefault(Literal.of(defaultIntValue))
-            .build());
-
-    Schema evolvedSchema = new Schema(evolvedColumns);
-    readAndAssertGenericRecords(
+    readAndAssertEngineRecords(
         fileFormat,
-        evolvedSchema,
+        expectedSchema,
         genericRecords,
         record -> {
-          Record expected = copy(record, writeSchema, evolvedSchema);
-          expected.setField("col_f", defaultStringValue);
-          expected.setField("col_g", defaultIntValue);
+          Record expected = GenericRecord.create(expectedSchema);
+          expected.setField("id", record.getField("id"));
+          expected.setField("data", record.getField("data"));
+          expected.setField("missing_str", "orange");
+          expected.setField("missing_int", 34);
+
           return expected;
         });
+  }
+
+  @ParameterizedTest
+  @FieldSource("FILE_FORMATS")
+  void testNullDefaultValue(FileFormat fileFormat) throws IOException {
+    assumeSupports(fileFormat, FEATURE_READER_DEFAULT);
+
+    Types.NestedField idField = Types.NestedField.required(1, "id", Types.LongType.get());
+    Types.NestedField dataField =
+        Types.NestedField.optional("data")
+            .withId(2)
+            .ofType(Types.StringType.get())
+            .withInitialDefault(Literal.of("wrong!"))
+            .withDoc("Should not produce default value")
+            .build();
+
+    Schema writeSchema = new Schema(idField, dataField);
+
+    List<Record> genericRecords = RandomGenericData.generate(writeSchema, 10, 1L);
+    writeGenericRecords(fileFormat, writeSchema, genericRecords);
+
+    Schema expectedSchema =
+        new Schema(
+            idField,
+            dataField,
+            Types.NestedField.optional("missing_date")
+                .withId(3)
+                .ofType(Types.DateType.get())
+                .build());
+
+    readAndAssertEngineRecords(
+        fileFormat,
+        expectedSchema,
+        genericRecords,
+        record -> {
+          Record expected = GenericRecord.create(expectedSchema);
+          expected.setField("id", record.getField("id"));
+          expected.setField("data", record.getField("data"));
+          expected.setField("missing_date", null);
+
+          return expected;
+        });
+  }
+
+  @ParameterizedTest
+  @FieldSource("FILE_FORMATS")
+  void testNestedDefaultValue(FileFormat fileFormat) throws IOException {
+    assumeSupports(fileFormat, FEATURE_READER_DEFAULT);
+
+    Types.NestedField idField = Types.NestedField.required(1, "id", Types.LongType.get());
+    Types.NestedField dataField =
+        Types.NestedField.optional("data")
+            .withId(2)
+            .ofType(Types.StringType.get())
+            .withInitialDefault(Literal.of("wrong!"))
+            .withDoc("Should not produce default value")
+            .build();
+
+    Schema writeSchema =
+        new Schema(
+            idField,
+            dataField,
+            Types.NestedField.optional("nested")
+                .withId(3)
+                .ofType(
+                    Types.StructType.of(
+                        Types.NestedField.required(4, "inner", Types.StringType.get())))
+                .withDoc("Used to test nested field defaults")
+                .build());
+
+    List<Record> genericRecords = RandomGenericData.generate(writeSchema, 10, 1L);
+    writeGenericRecords(fileFormat, writeSchema, genericRecords);
+
+    Schema expectedSchema =
+        new Schema(
+            idField,
+            dataField,
+            Types.NestedField.optional("nested")
+                .withId(3)
+                .ofType(
+                    Types.StructType.of(
+                        Types.NestedField.required(4, "inner", Types.StringType.get()),
+                        Types.NestedField.optional("missing_inner_float")
+                            .withId(5)
+                            .ofType(Types.FloatType.get())
+                            .withInitialDefault(Literal.of(-0.0F))
+                            .build()))
+                .withDoc("Used to test nested field defaults")
+                .build());
+
+    readAndAssertEngineRecords(
+        fileFormat,
+        expectedSchema,
+        genericRecords,
+        record -> {
+          Record expected = copy(record, writeSchema, expectedSchema);
+
+          Record writtenNested = (Record) record.getField("nested");
+          if (writtenNested != null) {
+            Record expectedNested =
+                GenericRecord.create(expectedSchema.findField("nested").type().asStructType());
+            expectedNested.setField("inner", writtenNested.getField("inner"));
+            expectedNested.setField("missing_inner_float", -0.0F);
+            expected.setField("nested", expectedNested);
+          }
+
+          return expected;
+        });
+  }
+
+  @ParameterizedTest
+  @FieldSource("FILE_FORMATS")
+  void testMapNestedDefaultValue(FileFormat fileFormat) throws IOException {
+    assumeSupports(fileFormat, FEATURE_READER_DEFAULT);
+
+    Types.NestedField idField = Types.NestedField.required(1, "id", Types.LongType.get());
+    Types.NestedField dataField =
+        Types.NestedField.optional("data")
+            .withId(2)
+            .ofType(Types.StringType.get())
+            .withInitialDefault(Literal.of("wrong!"))
+            .withDoc("Should not produce default value")
+            .build();
+
+    Schema writeSchema =
+        new Schema(
+            idField,
+            dataField,
+            Types.NestedField.optional("nested_map")
+                .withId(3)
+                .ofType(
+                    Types.MapType.ofOptional(
+                        4,
+                        5,
+                        Types.StringType.get(),
+                        Types.StructType.of(
+                            Types.NestedField.required(6, "value_str", Types.StringType.get()))))
+                .withDoc("Used to test nested map value field defaults")
+                .build());
+
+    List<Record> genericRecords = RandomGenericData.generate(writeSchema, 10, 1L);
+    writeGenericRecords(fileFormat, writeSchema, genericRecords);
+
+    Schema expectedSchema =
+        new Schema(
+            idField,
+            dataField,
+            Types.NestedField.optional("nested_map")
+                .withId(3)
+                .ofType(
+                    Types.MapType.ofOptional(
+                        4,
+                        5,
+                        Types.StringType.get(),
+                        Types.StructType.of(
+                            Types.NestedField.required(6, "value_str", Types.StringType.get()),
+                            Types.NestedField.optional("value_int")
+                                .withId(7)
+                                .ofType(Types.IntegerType.get())
+                                .withInitialDefault(Literal.of(34))
+                                .build())))
+                .withDoc("Used to test nested field defaults")
+                .build());
+
+    readAndAssertEngineRecords(
+        fileFormat,
+        expectedSchema,
+        genericRecords,
+        record -> {
+          Record expected = copy(record, writeSchema, expectedSchema);
+
+          @SuppressWarnings("unchecked")
+          Map<Object, Record> writtenMap = (Map<Object, Record>) expected.getField("nested_map");
+          if (writtenMap != null) {
+            Types.StructType valueType =
+                expectedSchema
+                    .findField("nested_map")
+                    .type()
+                    .asMapType()
+                    .valueType()
+                    .asStructType();
+            Map<Object, Record> rebuilt = Maps.newLinkedHashMap();
+            writtenMap.forEach(
+                (key, value) ->
+                    rebuilt.put(
+                        key,
+                        value == null
+                            ? null
+                            : GenericRecord.create(valueType)
+                                .copy("value_str", value.getField("value_str"), "value_int", 34)));
+            expected.setField("nested_map", rebuilt);
+          }
+
+          return expected;
+        });
+  }
+
+  @ParameterizedTest
+  @FieldSource("FILE_FORMATS")
+  void testListNestedDefaultValue(FileFormat fileFormat) throws IOException {
+    assumeSupports(fileFormat, FEATURE_READER_DEFAULT);
+
+    Types.NestedField idField = Types.NestedField.required(1, "id", Types.LongType.get());
+    Types.NestedField dataField =
+        Types.NestedField.optional("data")
+            .withId(2)
+            .ofType(Types.StringType.get())
+            .withInitialDefault(Literal.of("wrong!"))
+            .withDoc("Should not produce default value")
+            .build();
+
+    Schema writeSchema =
+        new Schema(
+            idField,
+            dataField,
+            Types.NestedField.optional("nested_list")
+                .withId(3)
+                .ofType(
+                    Types.ListType.ofOptional(
+                        4,
+                        Types.StructType.of(
+                            Types.NestedField.required(5, "element_str", Types.StringType.get()))))
+                .withDoc("Used to test nested field defaults")
+                .build());
+
+    List<Record> genericRecords = RandomGenericData.generate(writeSchema, 10, 1L);
+    writeGenericRecords(fileFormat, writeSchema, genericRecords);
+
+    Schema expectedSchema =
+        new Schema(
+            idField,
+            dataField,
+            Types.NestedField.optional("nested_list")
+                .withId(3)
+                .ofType(
+                    Types.ListType.ofOptional(
+                        4,
+                        Types.StructType.of(
+                            Types.NestedField.required(5, "element_str", Types.StringType.get()),
+                            Types.NestedField.optional("element_int")
+                                .withId(7)
+                                .ofType(Types.IntegerType.get())
+                                .withInitialDefault(Literal.of(34))
+                                .build())))
+                .withDoc("Used to test nested field defaults")
+                .build());
+
+    readAndAssertEngineRecords(
+        fileFormat,
+        expectedSchema,
+        genericRecords,
+        record -> {
+          Record expected = copy(record, writeSchema, expectedSchema);
+
+          @SuppressWarnings("unchecked")
+          List<Record> writtenList = (List<Record>) expected.getField("nested_list");
+          if (writtenList != null) {
+            Types.StructType elementType =
+                expectedSchema
+                    .findField("nested_list")
+                    .type()
+                    .asListType()
+                    .elementType()
+                    .asStructType();
+            List<Record> rebuilt =
+                writtenList.stream()
+                    .map(
+                        element ->
+                            element == null
+                                ? null
+                                : GenericRecord.create(elementType)
+                                    .copy(
+                                        "element_str",
+                                        element.getField("element_str"),
+                                        "element_int",
+                                        34))
+                    .collect(Collectors.toList());
+            expected.setField("nested_list", rebuilt);
+          }
+
+          return expected;
+        });
+  }
+
+  @ParameterizedTest
+  @FieldSource("FILE_FORMATS")
+  void testMissingRequiredWithoutDefault(FileFormat fileFormat) throws IOException {
+    assumeSupports(fileFormat, FEATURE_READER_DEFAULT);
+
+    Schema writeSchema = new Schema(Types.NestedField.required(1, "id", Types.LongType.get()));
+
+    List<Record> genericRecords = RandomGenericData.generate(writeSchema, 10, 1L);
+    writeGenericRecords(fileFormat, writeSchema, genericRecords);
+
+    Schema expectedSchema =
+        new Schema(
+            Types.NestedField.required(1, "id", Types.LongType.get()),
+            Types.NestedField.required("missing_str")
+                .withId(6)
+                .ofType(Types.StringType.get())
+                .withDoc("Missing required field with no default")
+                .build());
+
+    assertThatThrownBy(
+            () ->
+                readAndAssertEngineRecords(
+                    fileFormat, expectedSchema, genericRecords, record -> record))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("Missing required field: missing_str");
+  }
+
+  @ParameterizedTest
+  @FieldSource("FILE_FORMATS")
+  void testPrimitiveDefaultValues(FileFormat fileFormat) throws IOException {
+    assumeSupports(fileFormat, FEATURE_READER_DEFAULT);
+
+    Schema writeSchema = DataGenerators.PrimitiveDefaults.WRITE_SCHEMA;
+    Schema readSchema = filterUnsupported(DataGenerators.PrimitiveDefaults.READ_SCHEMA);
+
+    List<Record> sourceRecords = RandomGenericData.generate(writeSchema, 10, 1L);
+    writeGenericRecords(fileFormat, writeSchema, sourceRecords);
+
+    readAndAssertEngineRecords(
+        fileFormat,
+        readSchema,
+        sourceRecords,
+        record -> {
+          Record expected = GenericRecord.create(readSchema);
+          expected.setField("id", record.getField("id"));
+          for (Types.NestedField field : readSchema.columns()) {
+            if (!field.name().equals("id")) {
+              expected.setField(
+                  field.name(),
+                  GenericDataUtil.internalToGeneric(field.type(), field.initialDefault()));
+            }
+          }
+
+          return expected;
+        });
+  }
+
+  @ParameterizedTest
+  @FieldSource("FILE_FORMATS")
+  void testPrimitiveDefaultValuesNotApplied(FileFormat fileFormat) throws IOException {
+    assumeSupports(fileFormat, FEATURE_READER_DEFAULT);
+
+    Schema readSchema = filterUnsupported(DataGenerators.PrimitiveDefaults.READ_SCHEMA);
+
+    List<Record> sourceRecords = RandomGenericData.generate(readSchema, 10, 1L);
+    writeGenericRecords(fileFormat, readSchema, sourceRecords);
+
+    readAndAssertEngineRecords(fileFormat, readSchema, sourceRecords, record -> record);
   }
 
   @ParameterizedTest
@@ -1087,7 +1461,7 @@ public abstract class BaseFormatModelTests<T> {
 
   @ParameterizedTest
   @FieldSource("FILE_FORMATS")
-  void testReadMetadataColumnRowLinage(FileFormat fileFormat) throws IOException {
+  void testReadMetadataColumnRowLineage(FileFormat fileFormat) throws IOException {
 
     DataGenerator dataGenerator = new DataGenerators.DefaultSchema();
     Schema schema = dataGenerator.schema();
@@ -1120,7 +1494,7 @@ public abstract class BaseFormatModelTests<T> {
 
   @ParameterizedTest
   @FieldSource("FILE_FORMATS")
-  void testReadMetadataColumnRowLinageExistValue(FileFormat fileFormat) throws IOException {
+  void testReadMetadataColumnRowLineageExistingValues(FileFormat fileFormat) throws IOException {
 
     DataGenerator dataGenerator = new DataGenerators.DefaultSchema();
     Schema dataSchema = dataGenerator.schema();
@@ -1706,6 +2080,98 @@ public abstract class BaseFormatModelTests<T> {
         });
   }
 
+  @ParameterizedTest
+  @FieldSource("FILE_FORMATS")
+  void testDataWriterAesStreamEncryption(FileFormat fileFormat) throws IOException {
+    assumeSupports(fileFormat, FEATURE_AES_STREAM_ENCRYPTION);
+
+    EncryptionManager encryptionManager = EncryptionTestHelpers.createEncryptionManager();
+    EncryptingFileIO encryptingFileIO = EncryptingFileIO.combine(fileIO, encryptionManager);
+    EncryptedOutputFile encryptedOutputFile =
+        encryptingFileIO.newEncryptingOutputFile("test-file-" + UUID.randomUUID());
+
+    FileWriterBuilder<DataWriter<T>, ?> writerBuilder =
+        FormatModelRegistry.dataWriteBuilder(fileFormat, engineType(), encryptedOutputFile)
+            .keyMetadata(encryptedOutputFile.keyMetadata());
+
+    writeAndAssertEncryptedDataWriter(fileFormat, encryptingFileIO, writerBuilder);
+  }
+
+  @ParameterizedTest
+  @FieldSource("FILE_FORMATS")
+  void testDataWriterNativeEncryption(FileFormat fileFormat) throws IOException {
+    assumeSupports(fileFormat, FEATURE_NATIVE_ENCRYPTION);
+
+    EncryptionManager encryptionManager = EncryptionTestHelpers.createEncryptionManager();
+    EncryptingFileIO encryptingFileIO = EncryptingFileIO.combine(fileIO, encryptionManager);
+    String location = "test-file-" + UUID.randomUUID();
+    NativeEncryptionKeyMetadata keyMetadata =
+        (NativeEncryptionKeyMetadata)
+            encryptingFileIO.newEncryptingOutputFile(location).keyMetadata();
+
+    // Use a plain encrypted output file so Parquet cannot auto-inject the native encryption key
+    // and AAD prefix from the output file metadata. This ensures encryption is driven only by
+    // withFileEncryptionKey and withAADPrefix below.
+    EncryptedOutputFile encryptedOutputFile =
+        EncryptedFiles.plainAsEncryptedOutput(fileIO.newOutputFile(location));
+
+    // keyMetadata is mainly used for parsing during reading, so this call is required here.
+    FileWriterBuilder<DataWriter<T>, ?> writerBuilder =
+        FormatModelRegistry.dataWriteBuilder(fileFormat, engineType(), encryptedOutputFile)
+            .keyMetadata(keyMetadata)
+            .withFileEncryptionKey(keyMetadata.encryptionKey().duplicate())
+            .withAADPrefix(keyMetadata.aadPrefix().duplicate());
+
+    writeAndAssertEncryptedDataWriter(fileFormat, encryptingFileIO, writerBuilder);
+  }
+
+  @SuppressWarnings("checkstyle:AssertThatThrownByWithMessageCheck")
+  private void writeAndAssertEncryptedDataWriter(
+      FileFormat fileFormat,
+      EncryptingFileIO encryptingFileIO,
+      FileWriterBuilder<DataWriter<T>, ?> writerBuilder)
+      throws IOException {
+    DataGenerator dataGenerator = new DataGenerators.DefaultSchema();
+    Schema schema = dataGenerator.schema();
+    List<Record> genericRecords = dataGenerator.generateRecords();
+    List<T> engineRecords = convertToEngineRecords(genericRecords, schema);
+
+    DataWriter<T> writer = writerBuilder.schema(schema).spec(PartitionSpec.unpartitioned()).build();
+
+    try (writer) {
+      engineRecords.forEach(writer::write);
+    }
+
+    DataFile dataFile = writer.toDataFile();
+    assertThat(dataFile).isNotNull();
+    assertThat(dataFile.recordCount()).isEqualTo(engineRecords.size());
+    assertThat(dataFile.format()).isEqualTo(fileFormat);
+    assertThat(dataFile.keyMetadata()).isNotNull();
+
+    assertThatThrownBy(
+            () ->
+                readAndAssertGenericRecords(
+                    fileFormat, schema, genericRecords, fileIO.newInputFile(dataFile.location())))
+        .isInstanceOf(RuntimeException.class);
+
+    readAndAssertGenericRecords(
+        fileFormat, schema, genericRecords, encryptingFileIO.newInputFile(dataFile));
+  }
+
+  private void readAndAssertGenericRecords(
+      FileFormat fileFormat, Schema schema, List<Record> expected, InputFile inputFile)
+      throws IOException {
+    List<Record> readRecords;
+    try (CloseableIterable<Record> reader =
+        FormatModelRegistry.readBuilder(fileFormat, Record.class, inputFile)
+            .project(schema)
+            .build()) {
+      readRecords = ImmutableList.copyOf(reader);
+    }
+
+    DataTestHelpers.assertEquals(schema.asStruct(), expected, readRecords);
+  }
+
   private void readAndAssertGenericRecords(
       FileFormat fileFormat, Schema schema, List<Record> expected) throws IOException {
     InputFile inputFile = encryptedFile.encryptingOutputFile().toInputFile();
@@ -1922,8 +2388,8 @@ public abstract class BaseFormatModelTests<T> {
     Map<Integer, ByteBuffer> upperBounds = file.upperBounds();
     for (Types.NestedField field : schema.columns()) {
       if (field.type().isPrimitiveType()) {
-        assertThat(lowerBounds == null || lowerBounds.get(field.fieldId()) == null).isTrue();
-        assertThat(upperBounds == null || upperBounds.get(field.fieldId()) == null).isTrue();
+        assertMetricMissing(lowerBounds, field, "lower bounds");
+        assertMetricMissing(upperBounds, field, "upper bounds");
       }
     }
   }
@@ -1949,10 +2415,18 @@ public abstract class BaseFormatModelTests<T> {
     Map<Integer, Long> nullValueCounts = file.nullValueCounts();
     for (Types.NestedField field : schema.columns()) {
       if (field.type().isPrimitiveType()) {
-        assertThat(valueCounts == null || valueCounts.get(field.fieldId()) == null).isTrue();
-        assertThat(nullValueCounts == null || nullValueCounts.get(field.fieldId()) == null)
-            .isTrue();
+        assertMetricMissing(valueCounts, field, "value counts");
+        assertMetricMissing(nullValueCounts, field, "null value counts");
       }
+    }
+  }
+
+  private static <T> void assertMetricMissing(
+      Map<Integer, T> metrics, Types.NestedField field, String metricName) {
+    if (metrics != null) {
+      assertThat(metrics)
+          .as("%s should not contain field '%s' (id=%s)", metricName, field.name(), field.fieldId())
+          .doesNotContainKey(field.fieldId());
     }
   }
 
@@ -2139,7 +2613,7 @@ public abstract class BaseFormatModelTests<T> {
     InputFile inputFile = encryptedFile.encryptingOutputFile().toInputFile();
     List<T> readRecords;
 
-    var readerBuilder =
+    ReadBuilder<T, ?> readerBuilder =
         FormatModelRegistry.readBuilder(fileFormat, engineType(), inputFile)
             .project(projectionSchema);
 
@@ -2209,15 +2683,31 @@ public abstract class BaseFormatModelTests<T> {
 
   private DataFile writeEngineRecords(FileFormat fileFormat, Schema schema, List<T> records)
       throws IOException {
-    return writeEngineRecords(fileFormat, schema, records, false /* overwrite */);
+    return writeEngineRecords(fileFormat, schema, records, false /* overwrite */, null);
+  }
+
+  private DataFile writeEngineRecords(
+      FileFormat fileFormat, Schema schema, List<T> records, Object engineSchema)
+      throws IOException {
+    return writeEngineRecords(fileFormat, schema, records, false /* overwrite */, engineSchema);
   }
 
   private DataFile writeEngineRecords(
       FileFormat fileFormat, Schema schema, List<T> records, boolean overwrite) throws IOException {
+    return writeEngineRecords(fileFormat, schema, records, overwrite, null);
+  }
+
+  private DataFile writeEngineRecords(
+      FileFormat fileFormat, Schema schema, List<T> records, boolean overwrite, Object engineSchema)
+      throws IOException {
     FileWriterBuilder<DataWriter<T>, Object> writerBuilder =
         FormatModelRegistry.dataWriteBuilder(fileFormat, engineType(), encryptedFile);
 
     writerBuilder.schema(schema).spec(PartitionSpec.unpartitioned());
+
+    if (engineSchema != null) {
+      writerBuilder.engineSchema(engineSchema);
+    }
 
     if (overwrite) {
       writerBuilder.overwrite();
