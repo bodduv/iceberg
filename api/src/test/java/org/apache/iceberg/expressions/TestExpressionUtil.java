@@ -1548,7 +1548,7 @@ public class TestExpressionUtil {
   // Tests for UUID bounds predicate detection and transformation
 
   @Test
-  public void testToSignedUUIDLiteralNoTransformForNonUuid() {
+  public void toSignedUUIDLiteralNoTransformForNonUuid() {
     Expression original = Expressions.equal("id", 42L);
     Expression result = ExpressionUtil.toSignedUUIDLiteral(original);
 
@@ -1556,7 +1556,7 @@ public class TestExpressionUtil {
   }
 
   @Test
-  public void testToSignedUUIDLiteralNoTransformForIsNull() {
+  public void toSignedUUIDLiteralNoTransformForIsNull() {
     Expression original = Expressions.isNull("uuid_col");
     Expression result = ExpressionUtil.toSignedUUIDLiteral(original);
 
@@ -1566,7 +1566,7 @@ public class TestExpressionUtil {
   }
 
   @Test
-  public void testToSignedUUIDLiteralTransformsEqPredicate() {
+  public void toSignedUUIDLiteralTransformsEqPredicate() {
     UUID testUuid = UUID_20;
     Expression original = Expressions.equal("uuid_col", testUuid);
 
@@ -1591,7 +1591,7 @@ public class TestExpressionUtil {
   }
 
   @Test
-  public void testToSignedUUIDLiteralTransformsLtPredicate() {
+  public void toSignedUUIDLiteralTransformsLtPredicate() {
     UUID testUuid = UUID_40;
     Expression original = Expressions.lessThan("uuid_col", testUuid);
 
@@ -1614,7 +1614,7 @@ public class TestExpressionUtil {
   }
 
   @Test
-  public void testToSignedUUIDLiteralTransformsGtPredicate() {
+  public void toSignedUUIDLiteralTransformsGtPredicate() {
     UUID testUuid = UUID_80;
     Expression original = Expressions.greaterThan("uuid_col", testUuid);
 
@@ -1637,7 +1637,7 @@ public class TestExpressionUtil {
   }
 
   @Test
-  public void testToSignedUUIDLiteralTransformsInPredicate() {
+  public void toSignedUUIDLiteralTransformsInPredicate() {
     UUID uuid1 = UUID_20;
     UUID uuid2 = UUID_FF;
     Expression original = Expressions.in("uuid_col", uuid1, uuid2);
@@ -1673,7 +1673,7 @@ public class TestExpressionUtil {
   }
 
   @Test
-  public void testToSignedUUIDLiteralTransformsCompoundExpression() {
+  public void toSignedUUIDLiteralTransformsCompoundExpression() {
     UUID testUuid = UUID_FF;
     Expression original =
         Expressions.and(
@@ -1710,7 +1710,7 @@ public class TestExpressionUtil {
   }
 
   @Test
-  public void testHasBoundUUIDBoundsPredicateWithUUIDLiteral() {
+  public void hasBoundUUIDBoundsPredicateWithUUIDLiteral() {
     UUID uuid = UUID_40;
 
     assertThat(
@@ -1721,7 +1721,7 @@ public class TestExpressionUtil {
   }
 
   @Test
-  public void testHasBoundUUIDBoundsPredicateWithStringLiteral() {
+  public void hasBoundUUIDBoundsPredicateWithStringLiteral() {
     UUID uuid = UUID_80;
 
     assertThat(
@@ -1732,7 +1732,7 @@ public class TestExpressionUtil {
   }
 
   @Test
-  public void testHasBoundUUIDBoundsPredicateForNonUUIDColumn() {
+  public void hasBoundUUIDBoundsPredicateForNonUUIDColumn() {
     UUID uuid = UUID_FF;
 
     assertThat(
@@ -1748,7 +1748,7 @@ public class TestExpressionUtil {
   }
 
   @Test
-  public void testHasBoundUUIDBoundsPredicateIgnoresNullPredicates() {
+  public void hasBoundUUIDBoundsPredicateIgnoresNullPredicates() {
     assertThat(
             ExpressionUtil.hasBoundUUIDBoundsPredicate(
                 OPTIONAL_UUID_SCHEMA, Expressions.isNull("uuid_col"), true))

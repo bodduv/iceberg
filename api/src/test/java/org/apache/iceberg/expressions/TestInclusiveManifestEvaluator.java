@@ -928,7 +928,7 @@ public class TestInclusiveManifestEvaluator {
   }
 
   @Test
-  public void testUuidEq() {
+  public void uuidEq() {
     UUID belowMin = UUID.fromString("00000000-0000-0000-0000-000000000000");
     boolean shouldRead =
         ManifestEvaluator.forRowFilter(equal("uuid", belowMin), SPEC, true).eval(FILE);
@@ -952,7 +952,7 @@ public class TestInclusiveManifestEvaluator {
   }
 
   @Test
-  public void testUuidLt() {
+  public void uuidLt() {
     // With RFC comparison, belowMin is below the lower bound so no rows can be < belowMin.
     // With signed comparison, UUID_MIN_VALUE.compareTo(belowMin) = -1 (lower < lit),
     // so rows might match. We try both comparators and return true if either matches.
@@ -986,7 +986,7 @@ public class TestInclusiveManifestEvaluator {
   }
 
   @Test
-  public void testUuidLtEq() {
+  public void uuidLtEq() {
     // With RFC comparison, belowMin is below the lower bound so no rows can be <= belowMin.
     // With signed comparison, the bounds are inverted, so rows might match.
     UUID belowMin = UUID.fromString("00000000-0000-0000-0000-000000000000");
@@ -1013,7 +1013,7 @@ public class TestInclusiveManifestEvaluator {
   }
 
   @Test
-  public void testUuidGt() {
+  public void uuidGt() {
     UUID belowMin = UUID.fromString("00000000-0000-0000-0000-000000000000");
     boolean shouldRead =
         ManifestEvaluator.forRowFilter(greaterThan("uuid", belowMin), SPEC, true).eval(FILE);
@@ -1050,7 +1050,7 @@ public class TestInclusiveManifestEvaluator {
   }
 
   @Test
-  public void testUuidGtEq() {
+  public void uuidGtEq() {
     UUID belowMin = UUID.fromString("00000000-0000-0000-0000-000000000000");
     boolean shouldRead =
         ManifestEvaluator.forRowFilter(greaterThanOrEqual("uuid", belowMin), SPEC, true).eval(FILE);
@@ -1078,7 +1078,7 @@ public class TestInclusiveManifestEvaluator {
   }
 
   @Test
-  public void testUuidIn() {
+  public void uuidIn() {
     UUID belowMin1 = UUID.fromString("00000000-0000-0000-0000-000000000000");
     UUID belowMin2 = UUID.fromString("00000000-0000-0000-0000-000000000001");
     boolean shouldRead =
@@ -1122,7 +1122,7 @@ public class TestInclusiveManifestEvaluator {
   // With signed comparator, the manifest has min=0x80..., max=0x40... (inverted bounds).
 
   @Test
-  public void testLegacyUuidManifestIn() {
+  public void legacyUuidManifestIn() {
     // 0x20... and 0x30... are between 0x80... and 0x40... in signed order.
     // RFC unsigned filters them out (both < 0x80...), but legacy signed includes them.
     UUID uuid1 = UUID.fromString("20000000-0000-0000-0000-000000000001");
@@ -1136,7 +1136,7 @@ public class TestInclusiveManifestEvaluator {
   }
 
   @Test
-  public void testLegacyUuidManifestInAllBelowLowerBound() {
+  public void legacyUuidManifestInAllBelowLowerBound() {
     // 0x50... and 0x60... are outside bounds in both orderings:
     //   - RFC unsigned: both < 0x80... (lower bound)
     //   - Signed: both > 0x40... (upper bound)
@@ -1151,7 +1151,7 @@ public class TestInclusiveManifestEvaluator {
   }
 
   @Test
-  public void testLegacyUuidManifestEq() {
+  public void legacyUuidManifestEq() {
     // 0x20... is between 0x80... and 0x40... in signed order (within the manifest's actual range).
     // RFC unsigned fails (0x20... < 0x80...), but legacy signed succeeds.
     UUID queryUuid = UUID.fromString("20000000-0000-0000-0000-000000000001");
@@ -1164,7 +1164,7 @@ public class TestInclusiveManifestEvaluator {
   }
 
   @Test
-  public void testLegacyUuidManifestLt() {
+  public void legacyUuidManifestLt() {
     // In signed order, 0x80... < 0x30..., so the manifest's min satisfies uuid < 0x30...
     UUID queryUuid = UUID.fromString("30000000-0000-0000-0000-000000000001");
     boolean shouldRead =
@@ -1176,7 +1176,7 @@ public class TestInclusiveManifestEvaluator {
   }
 
   @Test
-  public void testLegacyUuidManifestGt() {
+  public void legacyUuidManifestGt() {
     // In signed order, 0x40... > 0x20..., so the manifest's max satisfies uuid > 0x20...
     UUID queryUuid = UUID.fromString("20000000-0000-0000-0000-000000000001");
     boolean shouldRead =

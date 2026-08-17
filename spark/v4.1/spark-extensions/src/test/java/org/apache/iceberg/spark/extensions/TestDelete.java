@@ -345,7 +345,7 @@ public abstract class TestDelete extends SparkRowLevelOperationsTestBase {
   }
 
   @TestTemplate
-  public void testNonUuidPartitionDeleteUsesMetadataDelete() throws NoSuchTableException {
+  public void nonUuidPartitionDeleteUsesMetadataDelete() throws NoSuchTableException {
     createAndInitPartitionedTable();
     append(tableName, employees("hr", 1));
     append(tableName, employees("hardware", 11));
@@ -362,7 +362,7 @@ public abstract class TestDelete extends SparkRowLevelOperationsTestBase {
   }
 
   @TestTemplate
-  public void testUuidDeleteFallsBackToRowLevelOperation() {
+  public void uuidDeleteFallsBackToRowLevelOperation() {
     validationCatalog.createTable(tableIdent, UUID_SCHEMA, UUID_SPEC);
     initTable();
     insertUuidRows(UUID_00, 1);

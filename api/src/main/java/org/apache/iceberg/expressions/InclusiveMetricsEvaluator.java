@@ -126,8 +126,9 @@ public class InclusiveMetricsEvaluator {
 
     @Override
     protected <T> Comparator<T> comparator(Bound<T> term) {
+      BoundTerm<T> boundTerm = (BoundTerm<T>) term;
       return Comparators.comparatorFor(
-          term.ref().type(), ((BoundTerm<T>) term).comparator(), useSignedUuidComparator);
+          boundTerm.type(), boundTerm.comparator(), useSignedUuidComparator);
     }
 
     @Override

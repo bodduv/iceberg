@@ -95,7 +95,7 @@ public class TestComparators {
   }
 
   @Test
-  public void testUuid() {
+  public void uuid() {
     assertComparesCorrectly(
         Comparators.forType(Types.UUIDType.get()),
         UUID.fromString("81873e7d-1374-4493-8e1d-9095eff7046c"),
@@ -132,7 +132,7 @@ public class TestComparators {
   }
 
   @Test
-  public void testSignedUuid() {
+  public void signedUuid() {
     // Test the signed UUID comparator used for backward compatibility with legacy files.
     // In signed comparison, UUIDs with high bit set (0x80...) are treated as negative,
     // so they compare less than UUIDs without high bit set (0x00-0x7F...).

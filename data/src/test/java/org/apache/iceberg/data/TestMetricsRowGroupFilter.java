@@ -1341,7 +1341,7 @@ public class TestMetricsRowGroupFilter {
    * matching rows when reading legacy files with inverted UUID bounds.
    */
   @TestTemplate
-  public void testUUIDWithHighBitValues() throws IOException {
+  public void uuidWithHighBitValues() throws IOException {
     assumeThat(format).as("Only valid for Parquet").isEqualTo(FileFormat.PARQUET);
 
     // Create a file with UUIDs spanning the signed/unsigned boundary
@@ -1414,7 +1414,7 @@ public class TestMetricsRowGroupFilter {
    * legacy files that may have UUID bounds computed with signed comparison.
    */
   @TestTemplate
-  public void testUUIDComparisonBoundary() throws IOException {
+  public void uuidComparisonBoundary() throws IOException {
     assumeThat(format).as("Only valid for Parquet").isEqualTo(FileFormat.PARQUET);
 
     // Create a file with only high-bit UUIDs (0x80... and above)
@@ -1472,7 +1472,7 @@ public class TestMetricsRowGroupFilter {
    * out using the unsigned comparison.
    */
   @TestTemplate
-  public void testLegacyUUIDParquetFileWithSignedComparator() throws IOException {
+  public void legacyUuidParquetFileWithSignedComparator() throws IOException {
     assumeThat(format).as("Only valid for Parquet").isEqualTo(FileFormat.PARQUET);
 
     MessageType legacySchema = ParquetSchemaUtil.convert(UUID_SCHEMA, "legacy_uuid_test");

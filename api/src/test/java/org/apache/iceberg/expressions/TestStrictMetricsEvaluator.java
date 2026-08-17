@@ -975,7 +975,7 @@ public class TestStrictMetricsEvaluator {
   // UUID_FILE has bounds [UUID_MIN=0x00...01, UUID_MAX=0x80...01]
 
   @Test
-  public void testStrictUuidGt() {
+  public void strictUuidGt() {
     UUID belowMin = UUID.fromString("00000000-0000-0000-0000-000000000000");
     boolean allMatch =
         new StrictMetricsEvaluator(SCHEMA, greaterThan("uuid", belowMin)).eval(UUID_FILE);
@@ -1001,7 +1001,7 @@ public class TestStrictMetricsEvaluator {
   }
 
   @Test
-  public void testStrictUuidLt() {
+  public void strictUuidLt() {
     // Query: uuid < belowMin - no values are < belowMin
     UUID belowMin = UUID.fromString("00000000-0000-0000-0000-000000000000");
     boolean allMatch =
@@ -1027,7 +1027,7 @@ public class TestStrictMetricsEvaluator {
   }
 
   @Test
-  public void testStrictUuidInclusiveBoundsAndNotEqDoNotMatch() {
+  public void strictUuidInclusiveBoundsAndNotEqDoNotMatch() {
     UUID belowMin = UUID.fromString("00000000-0000-0000-0000-000000000000");
     boolean allMatch =
         new StrictMetricsEvaluator(SCHEMA, greaterThanOrEqual("uuid", belowMin)).eval(UUID_FILE);
@@ -1043,7 +1043,7 @@ public class TestStrictMetricsEvaluator {
   }
 
   @Test
-  public void testStrictUuidEqNeverMatchesRange() {
+  public void strictUuidEqNeverMatchesRange() {
     // Strict eq should never match when there's a range of values
     UUID middle = UUID.fromString("40000000-0000-0000-0000-000000000001");
     boolean allMatch = new StrictMetricsEvaluator(SCHEMA, equal("uuid", middle)).eval(UUID_FILE);
@@ -1051,7 +1051,7 @@ public class TestStrictMetricsEvaluator {
   }
 
   @Test
-  public void testStrictUuidInNeverMatchesRange() {
+  public void strictUuidInNeverMatchesRange() {
     // Strict IN should never match when there's a range of values (lower != upper)
     UUID middle1 = UUID.fromString("40000000-0000-0000-0000-000000000001");
     UUID middle2 = UUID.fromString("50000000-0000-0000-0000-000000000001");
@@ -1061,14 +1061,14 @@ public class TestStrictMetricsEvaluator {
   }
 
   @Test
-  public void testStrictUuidInDoesNotMatchSingleValue() {
+  public void strictUuidInDoesNotMatchSingleValue() {
     boolean allMatch =
         new StrictMetricsEvaluator(SCHEMA, in("uuid", SINGLE_UUID)).eval(SINGLE_UUID_FILE);
     assertThat(allMatch).as("Strict UUID IN should not match using metrics").isFalse();
   }
 
   @Test
-  public void testStrictUuidInDoesNotMatchWhenValueNotInSet() {
+  public void strictUuidInDoesNotMatchWhenValueNotInSet() {
     // Strict IN should not match when lower == upper but the value is not in the set
     UUID otherUuid = UUID.fromString("50000000-0000-0000-0000-000000000001");
     boolean allMatch =
@@ -1077,7 +1077,7 @@ public class TestStrictMetricsEvaluator {
   }
 
   @Test
-  public void testStrictUuidNotInDoesNotMatchWhenAllValuesOutsideBounds() {
+  public void strictUuidNotInDoesNotMatchWhenAllValuesOutsideBounds() {
     UUID belowMin = UUID.fromString("00000000-0000-0000-0000-000000000000");
     UUID aboveMax = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");
     boolean allMatch =
@@ -1086,7 +1086,7 @@ public class TestStrictMetricsEvaluator {
   }
 
   @Test
-  public void testStrictUuidNotInDoesNotMatchWhenValueInBounds() {
+  public void strictUuidNotInDoesNotMatchWhenValueInBounds() {
     // Strict NOT IN should not match when a value in the set is within bounds
     UUID middle = UUID.fromString("40000000-0000-0000-0000-000000000001");
     boolean allMatch = new StrictMetricsEvaluator(SCHEMA, notIn("uuid", middle)).eval(UUID_FILE);
@@ -1097,7 +1097,7 @@ public class TestStrictMetricsEvaluator {
   // Tests for file with inverted UUID bounds (as would be written by legacy signed comparator)
 
   @Test
-  public void testStrictUuidInWithLegacyInvertedBounds() {
+  public void strictUuidInWithLegacyInvertedBounds() {
     // With inverted bounds [0x80..., 0x40...] where lower > upper in RFC order,
     // strict IN should never match since lower != upper
     UUID uuid1 = UUID.fromString("20000000-0000-0000-0000-000000000001");
@@ -1108,7 +1108,7 @@ public class TestStrictMetricsEvaluator {
   }
 
   @Test
-  public void testStrictUuidNotInWithLegacyInvertedBounds() {
+  public void strictUuidNotInWithLegacyInvertedBounds() {
     // Query: NOT IN (0x50..., 0x60...)
     // With inverted bounds [0x80..., 0x40...], in RFC order: 0x40... < 0x50... < 0x60... < 0x80...
     // The values 0x50... and 0x60... are between upper (0x40...) and lower (0x80...) in RFC order

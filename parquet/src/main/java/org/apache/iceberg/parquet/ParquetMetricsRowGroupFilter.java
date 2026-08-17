@@ -19,12 +19,10 @@
 package org.apache.iceberg.parquet;
 
 import java.nio.ByteBuffer;
-import java.util.Collection;
 import java.util.Comparator;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.expressions.Binder;
 import org.apache.iceberg.expressions.Bound;
@@ -226,8 +224,7 @@ public class ParquetMetricsRowGroupFilter {
       // When filtering nested types or variant types, notNull() is an implicit filter passed
       // even though complex filters aren't pushed down in Parquet. Leave these type filters
       // to be evaluated post scan.
-      Type type = schema.findType(id);
-      if (type instanceof Type.NestedType || type.isVariantType()) {
+      if (isNestedOrVariantType(id)) {
         return ROWS_MIGHT_MATCH;
       }
 
@@ -396,8 +393,7 @@ public class ParquetMetricsRowGroupFilter {
 
       // Leave all nested column type and variant type filters to be
       // evaluated post scan.
-      Type type = schema.findType(id);
-      if (type instanceof Type.NestedType || type.isVariantType()) {
+      if (isNestedOrVariantType(id)) {
         return ROWS_MIGHT_MATCH;
       }
 
@@ -446,8 +442,7 @@ public class ParquetMetricsRowGroupFilter {
 
       // Leave all nested column type and variant type filters to be
       // evaluated post scan.
-      Type type = schema.findType(id);
-      if (type instanceof Type.NestedType || type.isVariantType()) {
+      if (isNestedOrVariantType(id)) {
         return ROWS_MIGHT_MATCH;
       }
 
@@ -467,9 +462,7 @@ public class ParquetMetricsRowGroupFilter {
           return ROWS_MIGHT_MATCH;
         }
 
-        Collection<T> literals = literalSet;
-
-        if (literals.size() > IN_PREDICATE_LIMIT) {
+        if (literalSet.size() > IN_PREDICATE_LIMIT) {
           // skip evaluating the predicate if the number of values is too big
           return ROWS_MIGHT_MATCH;
         }
@@ -478,20 +471,15 @@ public class ParquetMetricsRowGroupFilter {
         Comparator<T> cmp =
             Comparators.comparatorFor(ref.type(), ref.comparator(), useSignedUuidComparator);
         T lower = min(colStats, id);
-        literals =
-            literals.stream().filter(v -> cmp.compare(lower, v) <= 0).collect(Collectors.toList());
-        if (literals.isEmpty()) { // if all values are less than lower bound, rows cannot match.
-          return ROWS_CANNOT_MATCH;
+        T upper = max(colStats, id);
+
+        for (T literal : literalSet) {
+          if (cmp.compare(lower, literal) <= 0 && cmp.compare(upper, literal) >= 0) {
+            return ROWS_MIGHT_MATCH;
+          }
         }
 
-        T upper = max(colStats, id);
-        literals =
-            literals.stream().filter(v -> cmp.compare(upper, v) >= 0).collect(Collectors.toList());
-        if (literals
-            .isEmpty()) { // if all remaining values are greater than upper bound, rows cannot
-          // match.
-          return ROWS_CANNOT_MATCH;
-        }
+        return ROWS_CANNOT_MATCH;
       }
 
       return ROWS_MIGHT_MATCH;
@@ -630,6 +618,11 @@ public class ParquetMetricsRowGroupFilter {
     @Override
     public <T> Boolean handleNonReference(Bound<T> term) {
       return ROWS_MIGHT_MATCH;
+    }
+
+    private boolean isNestedOrVariantType(int id) {
+      Type type = schema.findType(id);
+      return type instanceof Type.NestedType || type.isVariantType();
     }
   }
 

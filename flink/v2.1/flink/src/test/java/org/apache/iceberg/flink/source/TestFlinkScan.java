@@ -468,13 +468,13 @@ public abstract class TestFlinkScan {
   }
 
   @TestTemplate
-  public void testUuidFiltersWithLegacySignedParquetMetrics() throws Exception {
-    UuidFlinkScanTestHelpers.testUuidFiltersWithLegacySignedParquetMetrics(this);
+  public void uuidFiltersWithLegacySignedParquetMetrics() throws Exception {
+    UuidFlinkScanTestHelpers.uuidFiltersWithLegacySignedParquetMetrics(this);
   }
 
   @TestTemplate
-  public void testUuidFiltersWithUnsignedParquetMetrics() throws Exception {
-    UuidFlinkScanTestHelpers.testUuidFiltersWithUnsignedParquetMetrics(this);
+  public void uuidFiltersWithUnsignedParquetMetrics() throws Exception {
+    UuidFlinkScanTestHelpers.uuidFiltersWithUnsignedParquetMetrics(this);
   }
 
   @TestTemplate

@@ -844,39 +844,35 @@ public class ExpressionUtil {
     @Override
     @SuppressWarnings("unchecked")
     public <T> Expression predicate(UnboundPredicate<T> pred) {
-      switch (pred.op()) {
-        case LT:
-        case LT_EQ:
-        case GT:
-        case GT_EQ:
-        case EQ:
-        case NOT_EQ:
+      return switch (pred.op()) {
+        case LT, LT_EQ, GT, GT_EQ, EQ, NOT_EQ -> {
           if (pred.literal().value() instanceof UUID) {
             foundUUIDBoundsPredicate = true;
             Literals.UUIDLiteral uuidLit = (Literals.UUIDLiteral) pred.literal();
-            return new UnboundPredicate<>(
+            yield new UnboundPredicate<>(
                 pred.op(), pred.term(), (T) uuidLit.withSignedComparator());
           }
 
-          return pred;
+          yield pred;
+        }
 
-        case IN:
-        case NOT_IN:
+        case IN, NOT_IN -> {
           List<Literal<T>> literals = pred.literals();
           if (!literals.isEmpty() && literals.get(0).value() instanceof UUID) {
             foundUUIDBoundsPredicate = true;
-            List<T> transformedValues =
-                literals.stream()
-                    .map(l -> (T) ((Literals.UUIDLiteral) l).withSignedComparator())
-                    .collect(Collectors.toList());
-            return new UnboundPredicate<>(pred.op(), pred.term(), transformedValues);
+            List<T> transformedValues = Lists.newArrayListWithExpectedSize(literals.size());
+            for (Literal<T> literal : literals) {
+              transformedValues.add((T) ((Literals.UUIDLiteral) literal).withSignedComparator());
+            }
+
+            yield new UnboundPredicate<>(pred.op(), pred.term(), transformedValues);
           }
 
-          return pred;
+          yield pred;
+        }
 
-        default:
-          return pred;
-      }
+        default -> pred;
+      };
     }
   }
 
@@ -914,20 +910,10 @@ public class ExpressionUtil {
         return false;
       }
 
-      switch (pred.op()) {
-        case LT:
-        case LT_EQ:
-        case GT:
-        case GT_EQ:
-        case EQ:
-        case NOT_EQ:
-        case IN:
-        case NOT_IN:
-          return true;
-
-        default:
-          return false;
-      }
+      return switch (pred.op()) {
+        case LT, LT_EQ, GT, GT_EQ, EQ, NOT_EQ, IN, NOT_IN -> true;
+        default -> false;
+      };
     }
   }
 }

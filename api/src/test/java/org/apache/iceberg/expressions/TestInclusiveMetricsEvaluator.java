@@ -58,8 +58,8 @@ import org.apache.iceberg.types.Types.StringType;
 import org.apache.iceberg.util.UnicodeUtil;
 import org.junit.jupiter.api.Test;
 
-public class TestInclusiveMetricsEvaluator {
-  private static final Schema SCHEMA =
+public class TestInclusiveMetricsEvaluator<F> {
+  protected static final Schema SCHEMA =
       new Schema(
           required(1, "id", IntegerType.get()),
           optional(2, "no_stats", Types.IntegerType.get()),
@@ -77,7 +77,7 @@ public class TestInclusiveMetricsEvaluator {
           optional(14, "some_empty", Types.StringType.get()),
           optional(15, "uuid", Types.UUIDType.get()));
 
-  private static final Schema NESTED_SCHEMA =
+  protected static final Schema NESTED_SCHEMA =
       new Schema(
           required(
               100,
@@ -92,26 +92,28 @@ public class TestInclusiveMetricsEvaluator {
                   required(104, "required_street2", Types.StringType.get()),
                   optional(105, "optional_street2", Types.StringType.get()))));
 
-  private static final int INT_MIN_VALUE = 30;
-  private static final int INT_MAX_VALUE = 79;
+  protected static final Schema FLOAT_SCHEMA = new Schema(required(1, "f", Types.FloatType.get()));
+
+  protected static final int INT_MIN_VALUE = 30;
+  protected static final int INT_MAX_VALUE = 79;
 
   // UUIDs that demonstrate the difference between Java's natural order and byte-order comparison
   // UUID_MIN has all zeros in MSB, all ones in LSB: 00000000-0000-0000-ffff-ffffffffffff
   // UUID_MAX has all ones in MSB, all zeros in LSB: ffffffff-ffff-ffff-0000-000000000000
   // With byte-order comparison (correct): UUID_MIN < UUID_MAX (0x00... < 0xFF...)
   // With Java's natural order (incorrect): UUID_MIN > UUID_MAX (MSB 0 > MSB -1 as signed long)
-  private static final UUID UUID_MIN_VALUE =
+  protected static final UUID UUID_MIN_VALUE =
       UUID.fromString("00000000-0000-0000-ffff-ffffffffffff");
-  private static final UUID UUID_MAX_VALUE =
+  protected static final UUID UUID_MAX_VALUE =
       UUID.fromString("ffffffff-ffff-ffff-0000-000000000000");
 
   // Legacy file with "inverted" bounds (min > max in unsigned order)
   // Used for testing backward compatibility with files written using signed UUID comparator
   // File contains UUIDs from 0x80... to 0x40... (in signed order)
   // This represents actual values: 0x80..., 0x00..., 0x20..., 0x40...
-  private static final UUID LEGACY_SIGNED_MIN =
+  protected static final UUID LEGACY_SIGNED_MIN =
       UUID.fromString("80000000-0000-0000-0000-000000000001"); // a small value in signed order
-  private static final UUID LEGACY_SIGNED_MAX =
+  protected static final UUID LEGACY_SIGNED_MAX =
       UUID.fromString("40000000-0000-0000-0000-000000000001"); // a large value in signed order
 
   private static final DataFile LEGACY_UUID_FILE =
@@ -248,9 +250,9 @@ public class TestInclusiveMetricsEvaluator {
           Row.of(),
           10,
           // any value counts, including nulls
-          ImmutableMap.of(100, 5L, 101, 5L, 102, 5L, 103, 5L, 104, 5L, 105, 5L),
+          ImmutableMap.of(102, 5L, 103, 5L, 104, 5L, 105, 5L),
           // null value counts
-          ImmutableMap.of(100, 0L, 101, 5L, 103, 5L, 104, 5L, 105, 5L),
+          ImmutableMap.of(103, 5L, 104, 5L, 105, 5L),
           // nan value counts
           null,
           // lower bounds
@@ -258,78 +260,238 @@ public class TestInclusiveMetricsEvaluator {
           // upper bounds
           null);
 
+  private static final DataFile MISSING_STATS = new TestDataFile("file.parquet", Row.of(), 50);
+
+  private static final DataFile EMPTY_FILE = new TestDataFile("file.parquet", Row.of(), 0);
+
+  private static final DataFile RANGE_OF_VALUES =
+      new TestDataFile(
+          "range_of_values.avro",
+          Row.of(),
+          10,
+          ImmutableMap.of(3, 10L),
+          ImmutableMap.of(3, 0L),
+          null,
+          ImmutableMap.of(3, toByteBuffer(StringType.get(), "aaa")),
+          ImmutableMap.of(3, toByteBuffer(StringType.get(), "zzz")));
+
+  private static final DataFile SINGLE_VALUE_FILE =
+      new TestDataFile(
+          "single_value.avro",
+          Row.of(),
+          10,
+          ImmutableMap.of(3, 10L),
+          ImmutableMap.of(3, 0L),
+          null,
+          ImmutableMap.of(3, toByteBuffer(StringType.get(), "abc")),
+          ImmutableMap.of(3, toByteBuffer(StringType.get(), "abc")));
+
+  // some_empty is optional because a required column cannot contain nulls
+  private static final DataFile SINGLE_VALUE_WITH_NULLS =
+      new TestDataFile(
+          "single_value_nulls.avro",
+          Row.of(),
+          10,
+          ImmutableMap.of(14, 10L),
+          ImmutableMap.of(14, 2L),
+          null,
+          ImmutableMap.of(14, toByteBuffer(StringType.get(), "abc")),
+          ImmutableMap.of(14, toByteBuffer(StringType.get(), "abc")));
+
+  private static final DataFile SINGLE_VALUE_WITH_NAN =
+      new TestDataFile(
+          "single_value_nan.avro",
+          Row.of(),
+          10,
+          ImmutableMap.of(9, 10L),
+          ImmutableMap.of(9, 0L),
+          ImmutableMap.of(9, 2L),
+          ImmutableMap.of(9, toByteBuffer(Types.FloatType.get(), 5.0F)),
+          ImmutableMap.of(9, toByteBuffer(Types.FloatType.get(), 5.0F)));
+
+  private static final DataFile SINGLE_VALUE_NAN_BOUNDS =
+      new TestDataFile(
+          "single_value_nan_bounds.avro",
+          Row.of(),
+          10,
+          ImmutableMap.of(9, 10L),
+          ImmutableMap.of(9, 0L),
+          ImmutableMap.of(9, 0L),
+          ImmutableMap.of(9, toByteBuffer(Types.FloatType.get(), Float.NaN)),
+          ImmutableMap.of(9, toByteBuffer(Types.FloatType.get(), Float.NaN)));
+
+  private static final Map<Integer, ByteBuffer> FLOAT_BOUND =
+      ImmutableMap.of(1, toByteBuffer(Types.FloatType.get(), 1.0f));
+
+  private static final DataFile SINGLE_FLOAT_VALUE_FILE =
+      new TestDataFile(
+          "single_value_file.avro",
+          Row.of(),
+          10,
+          ImmutableMap.of(1, 10L),
+          ImmutableMap.of(1, 0L),
+          ImmutableMap.of(1, 0L),
+          FLOAT_BOUND,
+          FLOAT_BOUND);
+
+  private static final DataFile SINGLE_FLOAT_VALUE_FILE_WITH_NAN =
+      new TestDataFile(
+          "single_value_file.avro",
+          Row.of(),
+          10,
+          ImmutableMap.of(1, 10L),
+          ImmutableMap.of(1, 0L),
+          ImmutableMap.of(1, 1L), // contains a NaN value
+          FLOAT_BOUND,
+          FLOAT_BOUND);
+
+  protected boolean shouldRead(Schema schema, Expression expr, boolean caseSensitive, F testFile) {
+    return new InclusiveMetricsEvaluator(schema, expr, caseSensitive).eval((DataFile) testFile);
+  }
+
+  protected boolean shouldRead(Schema schema, Expression expr, F testFile) {
+    return shouldRead(schema, expr, true, testFile);
+  }
+
+  protected F file() {
+    return asFile(FILE);
+  }
+
+  protected F file2() {
+    return asFile(FILE_2);
+  }
+
+  protected F file3() {
+    return asFile(FILE_3);
+  }
+
+  protected F file4() {
+    return asFile(FILE_4);
+  }
+
+  protected F file5() {
+    return asFile(FILE_5);
+  }
+
+  protected F file6() {
+    return asFile(FILE_6);
+  }
+
+  protected F missingStats() {
+    return asFile(MISSING_STATS);
+  }
+
+  protected F emptyFile() {
+    return asFile(EMPTY_FILE);
+  }
+
+  protected F rangeOfValues() {
+    return asFile(RANGE_OF_VALUES);
+  }
+
+  protected F singleValueFile() {
+    return asFile(SINGLE_VALUE_FILE);
+  }
+
+  protected F singleValueWithNulls() {
+    return asFile(SINGLE_VALUE_WITH_NULLS);
+  }
+
+  protected F singleValueWithNaN() {
+    return asFile(SINGLE_VALUE_WITH_NAN);
+  }
+
+  protected F singleValueNaNBounds() {
+    return asFile(SINGLE_VALUE_NAN_BOUNDS);
+  }
+
+  protected F singleFloatValueFile() {
+    return asFile(SINGLE_FLOAT_VALUE_FILE);
+  }
+
+  protected F singleFloatValueFileWithNaN() {
+    return asFile(SINGLE_FLOAT_VALUE_FILE_WITH_NAN);
+  }
+
+  protected F legacyUuidFile() {
+    return asFile(LEGACY_UUID_FILE);
+  }
+
+  @SuppressWarnings("unchecked")
+  private F asFile(DataFile dataFile) {
+    return (F) dataFile;
+  }
+
   @Test
   public void testAllNulls() {
-    boolean shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notNull("all_nulls")).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, notNull("all_nulls"), file());
     assertThat(shouldRead).as("Should skip: no non-null value in all null column").isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, lessThan("all_nulls", "a")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, lessThan("all_nulls", "a"), file());
     assertThat(shouldRead).as("Should skip: lessThan on all null column").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, lessThanOrEqual("all_nulls", "a")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, lessThanOrEqual("all_nulls", "a"), file());
     assertThat(shouldRead).as("Should skip: lessThanOrEqual on all null column").isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, greaterThan("all_nulls", "a")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, greaterThan("all_nulls", "a"), file());
     assertThat(shouldRead).as("Should skip: greaterThan on all null column").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThanOrEqual("all_nulls", "a")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, greaterThanOrEqual("all_nulls", "a"), file());
     assertThat(shouldRead).as("Should skip: greaterThanOrEqual on all null column").isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, equal("all_nulls", "a")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, equal("all_nulls", "a"), file());
     assertThat(shouldRead).as("Should skip: equal on all null column").isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, startsWith("all_nulls", "a")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, startsWith("all_nulls", "a"), file());
     assertThat(shouldRead).as("Should skip: startsWith on all null column").isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notStartsWith("all_nulls", "a")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notStartsWith("all_nulls", "a"), file());
     assertThat(shouldRead).as("Should read: notStartsWith on all null column").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notNull("some_nulls")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notNull("some_nulls"), file());
     assertThat(shouldRead)
         .as("Should read: column with some nulls contains a non-null value")
         .isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notNull("no_nulls")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notNull("no_nulls"), file());
     assertThat(shouldRead).as("Should read: non-null column contains a non-null value").isTrue();
   }
 
   @Test
   public void testNoNulls() {
-    boolean shouldRead = new InclusiveMetricsEvaluator(SCHEMA, isNull("all_nulls")).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, isNull("all_nulls"), file());
     assertThat(shouldRead).as("Should read: at least one null value in all null column").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, isNull("some_nulls")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, isNull("some_nulls"), file());
     assertThat(shouldRead).as("Should read: column with some nulls contains a null value").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, isNull("no_nulls")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, isNull("no_nulls"), file());
     assertThat(shouldRead).as("Should skip: non-null column contains no null values").isFalse();
   }
 
   @Test
   public void testIsNaN() {
-    boolean shouldRead = new InclusiveMetricsEvaluator(SCHEMA, isNaN("all_nans")).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, isNaN("all_nans"), file());
     assertThat(shouldRead).as("Should read: at least one nan value in all nan column").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, isNaN("some_nans")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, isNaN("some_nans"), file());
     assertThat(shouldRead).as("Should read: at least one nan value in some nan column").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, isNaN("no_nans")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, isNaN("no_nans"), file());
     assertThat(shouldRead).as("Should skip: no-nans column contains no nan values").isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, isNaN("all_nulls_double")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, isNaN("all_nulls_double"), file());
     assertThat(shouldRead).as("Should skip: all-null column doesn't contain nan value").isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, isNaN("no_nan_stats")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, isNaN("no_nan_stats"), file());
     assertThat(shouldRead)
         .as("Should read: no guarantee on if contains nan value without nan stats")
         .isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, isNaN("all_nans_v1_stats")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, isNaN("all_nans_v1_stats"), file());
     assertThat(shouldRead).as("Should read: at least one nan value in all nan column").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, isNaN("nan_and_null_only")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, isNaN("nan_and_null_only"), file());
     assertThat(shouldRead)
         .as("Should read: at least one nan value in nan and nulls only column")
         .isTrue();
@@ -337,35 +499,35 @@ public class TestInclusiveMetricsEvaluator {
 
   @Test
   public void testNotNaN() {
-    boolean shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notNaN("all_nans")).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, notNaN("all_nans"), file());
     assertThat(shouldRead)
         .as("Should skip: column with all nans will not contain non-nan")
         .isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notNaN("some_nans")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notNaN("some_nans"), file());
     assertThat(shouldRead)
         .as("Should read: at least one non-nan value in some nan column")
         .isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notNaN("no_nans")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notNaN("no_nans"), file());
     assertThat(shouldRead).as("Should read: at least one non-nan value in no nan column").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notNaN("all_nulls_double")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notNaN("all_nulls_double"), file());
     assertThat(shouldRead)
         .as("Should read: at least one non-nan value in all null column")
         .isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notNaN("no_nan_stats")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notNaN("no_nan_stats"), file());
     assertThat(shouldRead)
         .as("Should read: no guarantee on if contains nan value without nan stats")
         .isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notNaN("all_nans_v1_stats")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notNaN("all_nans_v1_stats"), file());
     assertThat(shouldRead)
         .as("Should read: no guarantee on if contains nan value without nan stats")
         .isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notNaN("nan_and_null_only")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notNaN("nan_and_null_only"), file());
     assertThat(shouldRead)
         .as("Should read: at least one null value in nan and nulls only column")
         .isTrue();
@@ -373,25 +535,22 @@ public class TestInclusiveMetricsEvaluator {
 
   @Test
   public void testRequiredColumn() {
-    boolean shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notNull("required")).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, notNull("required"), file());
     assertThat(shouldRead).as("Should read: required columns are always non-null").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, isNull("required")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, isNull("required"), file());
     assertThat(shouldRead).as("Should skip: required columns are always non-null").isFalse();
   }
 
   @Test
   public void testMissingColumn() {
-    assertThatThrownBy(
-            () -> new InclusiveMetricsEvaluator(SCHEMA, lessThan("missing", 5)).eval(FILE))
+    assertThatThrownBy(() -> shouldRead(SCHEMA, lessThan("missing", 5), file()))
         .isInstanceOf(ValidationException.class)
         .hasMessageContaining("Cannot find field 'missing'");
   }
 
   @Test
   public void testMissingStats() {
-    DataFile missingStats = new TestDataFile("file.parquet", Row.of(), 50);
-
     Expression[] exprs =
         new Expression[] {
           lessThan("no_stats", 5),
@@ -407,15 +566,13 @@ public class TestInclusiveMetricsEvaluator {
         };
 
     for (Expression expr : exprs) {
-      boolean shouldRead = new InclusiveMetricsEvaluator(SCHEMA, expr).eval(missingStats);
+      boolean shouldRead = shouldRead(SCHEMA, expr, missingStats());
       assertThat(shouldRead).as("Should read when missing stats for expr: " + expr).isTrue();
     }
   }
 
   @Test
   public void testZeroRecordFile() {
-    DataFile empty = new TestDataFile("file.parquet", Row.of(), 0);
-
     Expression[] exprs =
         new Expression[] {
           lessThan("id", 5),
@@ -431,7 +588,7 @@ public class TestInclusiveMetricsEvaluator {
         };
 
     for (Expression expr : exprs) {
-      boolean shouldRead = new InclusiveMetricsEvaluator(SCHEMA, expr).eval(empty);
+      boolean shouldRead = shouldRead(SCHEMA, expr, emptyFile());
       assertThat(shouldRead).as("Should never read 0-record file: " + expr).isFalse();
     }
   }
@@ -439,13 +596,10 @@ public class TestInclusiveMetricsEvaluator {
   @Test
   public void testNot() {
     // this test case must use a real predicate, not alwaysTrue(), or binding will simplify it out
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, not(lessThan("id", INT_MIN_VALUE - 25))).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, not(lessThan("id", INT_MIN_VALUE - 25)), file());
     assertThat(shouldRead).as("Should read: not(false)").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, not(greaterThan("id", INT_MIN_VALUE - 25)))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, not(greaterThan("id", INT_MIN_VALUE - 25)), file());
     assertThat(shouldRead).as("Should skip: not(true)").isFalse();
   }
 
@@ -453,28 +607,24 @@ public class TestInclusiveMetricsEvaluator {
   public void testAnd() {
     // this test case must use a real predicate, not alwaysTrue(), or binding will simplify it out
     boolean shouldRead =
-        new InclusiveMetricsEvaluator(
-                SCHEMA,
-                and(
-                    lessThan("id", INT_MIN_VALUE - 25),
-                    greaterThanOrEqual("id", INT_MIN_VALUE - 30)))
-            .eval(FILE);
+        shouldRead(
+            SCHEMA,
+            and(lessThan("id", INT_MIN_VALUE - 25), greaterThanOrEqual("id", INT_MIN_VALUE - 30)),
+            file());
     assertThat(shouldRead).as("Should skip: and(false, true)").isFalse();
 
     shouldRead =
-        new InclusiveMetricsEvaluator(
-                SCHEMA,
-                and(
-                    lessThan("id", INT_MIN_VALUE - 25),
-                    greaterThanOrEqual("id", INT_MAX_VALUE + 1)))
-            .eval(FILE);
+        shouldRead(
+            SCHEMA,
+            and(lessThan("id", INT_MIN_VALUE - 25), greaterThanOrEqual("id", INT_MAX_VALUE + 1)),
+            file());
     assertThat(shouldRead).as("Should skip: and(false, false)").isFalse();
 
     shouldRead =
-        new InclusiveMetricsEvaluator(
-                SCHEMA,
-                and(greaterThan("id", INT_MIN_VALUE - 25), lessThanOrEqual("id", INT_MIN_VALUE)))
-            .eval(FILE);
+        shouldRead(
+            SCHEMA,
+            and(greaterThan("id", INT_MIN_VALUE - 25), lessThanOrEqual("id", INT_MIN_VALUE)),
+            file());
     assertThat(shouldRead).as("Should read: and(true, true)").isTrue();
   }
 
@@ -482,398 +632,312 @@ public class TestInclusiveMetricsEvaluator {
   public void testOr() {
     // this test case must use a real predicate, not alwaysTrue(), or binding will simplify it out
     boolean shouldRead =
-        new InclusiveMetricsEvaluator(
-                SCHEMA,
-                or(lessThan("id", INT_MIN_VALUE - 25), greaterThanOrEqual("id", INT_MAX_VALUE + 1)))
-            .eval(FILE);
+        shouldRead(
+            SCHEMA,
+            or(lessThan("id", INT_MIN_VALUE - 25), greaterThanOrEqual("id", INT_MAX_VALUE + 1)),
+            file());
     assertThat(shouldRead).as("Should skip: or(false, false)").isFalse();
 
     shouldRead =
-        new InclusiveMetricsEvaluator(
-                SCHEMA,
-                or(
-                    lessThan("id", INT_MIN_VALUE - 25),
-                    greaterThanOrEqual("id", INT_MAX_VALUE - 19)))
-            .eval(FILE);
+        shouldRead(
+            SCHEMA,
+            or(lessThan("id", INT_MIN_VALUE - 25), greaterThanOrEqual("id", INT_MAX_VALUE - 19)),
+            file());
     assertThat(shouldRead).as("Should read: or(false, true)").isTrue();
   }
 
   @Test
   public void testIntegerLt() {
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, lessThan("id", INT_MIN_VALUE - 25)).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, lessThan("id", INT_MIN_VALUE - 25), file());
     assertThat(shouldRead).as("Should not read: id range below lower bound (5 < 30)").isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, lessThan("id", INT_MIN_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, lessThan("id", INT_MIN_VALUE), file());
     assertThat(shouldRead)
         .as("Should not read: id range below lower bound (30 is not < 30)")
         .isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, lessThan("id", INT_MIN_VALUE + 1)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, lessThan("id", INT_MIN_VALUE + 1), file());
     assertThat(shouldRead).as("Should read: one possible id").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, lessThan("id", INT_MAX_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, lessThan("id", INT_MAX_VALUE), file());
     assertThat(shouldRead).as("Should read: many possible ids").isTrue();
   }
 
   @Test
   public void testIntegerLtEq() {
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, lessThanOrEqual("id", INT_MIN_VALUE - 25)).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, lessThanOrEqual("id", INT_MIN_VALUE - 25), file());
     assertThat(shouldRead).as("Should not read: id range below lower bound (5 < 30)").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, lessThanOrEqual("id", INT_MIN_VALUE - 1)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, lessThanOrEqual("id", INT_MIN_VALUE - 1), file());
     assertThat(shouldRead).as("Should not read: id range below lower bound (29 < 30)").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, lessThanOrEqual("id", INT_MIN_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, lessThanOrEqual("id", INT_MIN_VALUE), file());
     assertThat(shouldRead).as("Should read: one possible id").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, lessThanOrEqual("id", INT_MAX_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, lessThanOrEqual("id", INT_MAX_VALUE), file());
     assertThat(shouldRead).as("Should read: many possible ids").isTrue();
   }
 
   @Test
   public void testIntegerGt() {
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThan("id", INT_MAX_VALUE + 6)).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, greaterThan("id", INT_MAX_VALUE + 6), file());
     assertThat(shouldRead).as("Should not read: id range above upper bound (85 < 79)").isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, greaterThan("id", INT_MAX_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, greaterThan("id", INT_MAX_VALUE), file());
     assertThat(shouldRead)
         .as("Should not read: id range above upper bound (79 is not > 79)")
         .isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThan("id", INT_MAX_VALUE - 1)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, greaterThan("id", INT_MAX_VALUE - 1), file());
     assertThat(shouldRead).as("Should read: one possible id").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThan("id", INT_MAX_VALUE - 4)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, greaterThan("id", INT_MAX_VALUE - 4), file());
     assertThat(shouldRead).as("Should read: many possible ids").isTrue();
   }
 
   @Test
   public void testIntegerGtEq() {
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThanOrEqual("id", INT_MAX_VALUE + 6))
-            .eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, greaterThanOrEqual("id", INT_MAX_VALUE + 6), file());
     assertThat(shouldRead).as("Should not read: id range above upper bound (85 < 79)").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThanOrEqual("id", INT_MAX_VALUE + 1))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, greaterThanOrEqual("id", INT_MAX_VALUE + 1), file());
     assertThat(shouldRead).as("Should not read: id range above upper bound (80 > 79)").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThanOrEqual("id", INT_MAX_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, greaterThanOrEqual("id", INT_MAX_VALUE), file());
     assertThat(shouldRead).as("Should read: one possible id").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThanOrEqual("id", INT_MAX_VALUE - 4))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, greaterThanOrEqual("id", INT_MAX_VALUE - 4), file());
     assertThat(shouldRead).as("Should read: many possible ids").isTrue();
   }
 
   @Test
   public void testIntegerEq() {
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, equal("id", INT_MIN_VALUE - 25)).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, equal("id", INT_MIN_VALUE - 25), file());
     assertThat(shouldRead).as("Should not read: id below lower bound").isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, equal("id", INT_MIN_VALUE - 1)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, equal("id", INT_MIN_VALUE - 1), file());
     assertThat(shouldRead).as("Should not read: id below lower bound").isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, equal("id", INT_MIN_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, equal("id", INT_MIN_VALUE), file());
     assertThat(shouldRead).as("Should read: id equal to lower bound").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, equal("id", INT_MAX_VALUE - 4)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, equal("id", INT_MAX_VALUE - 4), file());
     assertThat(shouldRead).as("Should read: id between lower and upper bounds").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, equal("id", INT_MAX_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, equal("id", INT_MAX_VALUE), file());
     assertThat(shouldRead).as("Should read: id equal to upper bound").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, equal("id", INT_MAX_VALUE + 1)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, equal("id", INT_MAX_VALUE + 1), file());
     assertThat(shouldRead).as("Should not read: id above upper bound").isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, equal("id", INT_MAX_VALUE + 6)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, equal("id", INT_MAX_VALUE + 6), file());
     assertThat(shouldRead).as("Should not read: id above upper bound").isFalse();
   }
 
   @Test
   public void testIntegerNotEq() {
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notEqual("id", INT_MIN_VALUE - 25)).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, notEqual("id", INT_MIN_VALUE - 25), file());
     assertThat(shouldRead).as("Should read: id below lower bound").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notEqual("id", INT_MIN_VALUE - 1)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notEqual("id", INT_MIN_VALUE - 1), file());
     assertThat(shouldRead).as("Should read: id below lower bound").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notEqual("id", INT_MIN_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notEqual("id", INT_MIN_VALUE), file());
     assertThat(shouldRead).as("Should read: id equal to lower bound").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notEqual("id", INT_MAX_VALUE - 4)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notEqual("id", INT_MAX_VALUE - 4), file());
     assertThat(shouldRead).as("Should read: id between lower and upper bounds").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notEqual("id", INT_MAX_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notEqual("id", INT_MAX_VALUE), file());
     assertThat(shouldRead).as("Should read: id equal to upper bound").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notEqual("id", INT_MAX_VALUE + 1)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notEqual("id", INT_MAX_VALUE + 1), file());
     assertThat(shouldRead).as("Should read: id above upper bound").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notEqual("id", INT_MAX_VALUE + 6)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notEqual("id", INT_MAX_VALUE + 6), file());
     assertThat(shouldRead).as("Should read: id above upper bound").isTrue();
   }
 
   @Test
   public void testIntegerNotEqRewritten() {
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, not(equal("id", INT_MIN_VALUE - 25))).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, not(equal("id", INT_MIN_VALUE - 25)), file());
     assertThat(shouldRead).as("Should read: id below lower bound").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, not(equal("id", INT_MIN_VALUE - 1))).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, not(equal("id", INT_MIN_VALUE - 1)), file());
     assertThat(shouldRead).as("Should read: id below lower bound").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, not(equal("id", INT_MIN_VALUE))).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, not(equal("id", INT_MIN_VALUE)), file());
     assertThat(shouldRead).as("Should read: id equal to lower bound").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, not(equal("id", INT_MAX_VALUE - 4))).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, not(equal("id", INT_MAX_VALUE - 4)), file());
     assertThat(shouldRead).as("Should read: id between lower and upper bounds").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, not(equal("id", INT_MAX_VALUE))).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, not(equal("id", INT_MAX_VALUE)), file());
     assertThat(shouldRead).as("Should read: id equal to upper bound").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, not(equal("id", INT_MAX_VALUE + 1))).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, not(equal("id", INT_MAX_VALUE + 1)), file());
     assertThat(shouldRead).as("Should read: id above upper bound").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, not(equal("id", INT_MAX_VALUE + 6))).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, not(equal("id", INT_MAX_VALUE + 6)), file());
     assertThat(shouldRead).as("Should read: id above upper bound").isTrue();
   }
 
   @Test
   public void testCaseInsensitiveIntegerNotEqRewritten() {
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, not(equal("ID", INT_MIN_VALUE - 25)), false)
-            .eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, not(equal("ID", INT_MIN_VALUE - 25)), false, file());
     assertThat(shouldRead).as("Should read: id below lower bound").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, not(equal("ID", INT_MIN_VALUE - 1)), false)
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, not(equal("ID", INT_MIN_VALUE - 1)), false, file());
     assertThat(shouldRead).as("Should read: id below lower bound").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, not(equal("ID", INT_MIN_VALUE)), false).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, not(equal("ID", INT_MIN_VALUE)), false, file());
     assertThat(shouldRead).as("Should read: id equal to lower bound").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, not(equal("ID", INT_MAX_VALUE - 4)), false)
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, not(equal("ID", INT_MAX_VALUE - 4)), false, file());
     assertThat(shouldRead).as("Should read: id between lower and upper bounds").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, not(equal("ID", INT_MAX_VALUE)), false).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, not(equal("ID", INT_MAX_VALUE)), false, file());
     assertThat(shouldRead).as("Should read: id equal to upper bound").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, not(equal("ID", INT_MAX_VALUE + 1)), false)
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, not(equal("ID", INT_MAX_VALUE + 1)), false, file());
     assertThat(shouldRead).as("Should read: id above upper bound").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, not(equal("ID", INT_MAX_VALUE + 6)), false)
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, not(equal("ID", INT_MAX_VALUE + 6)), false, file());
     assertThat(shouldRead).as("Should read: id above upper bound").isTrue();
   }
 
   @Test
   public void testCaseSensitiveIntegerNotEqRewritten() {
-    assertThatThrownBy(
-            () -> new InclusiveMetricsEvaluator(SCHEMA, not(equal("ID", 5)), true).eval(FILE))
+    assertThatThrownBy(() -> shouldRead(SCHEMA, not(equal("ID", 5)), true, file()))
         .isInstanceOf(ValidationException.class)
         .hasMessageContaining("Cannot find field 'ID'");
   }
 
   @Test
   public void testStringStartsWith() {
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, startsWith("required", "a"), true).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, startsWith("required", "a"), true, file());
     assertThat(shouldRead).as("Should read: no stats").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, startsWith("required", "a"), true).eval(FILE_2);
+    shouldRead = shouldRead(SCHEMA, startsWith("required", "a"), true, file2());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, startsWith("required", "aa"), true).eval(FILE_2);
+    shouldRead = shouldRead(SCHEMA, startsWith("required", "aa"), true, file2());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, startsWith("required", "aaa"), true).eval(FILE_2);
+    shouldRead = shouldRead(SCHEMA, startsWith("required", "aaa"), true, file2());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, startsWith("required", "1s"), true).eval(FILE_3);
+    shouldRead = shouldRead(SCHEMA, startsWith("required", "1s"), true, file3());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, startsWith("required", "1str1x"), true).eval(FILE_3);
+    shouldRead = shouldRead(SCHEMA, startsWith("required", "1str1x"), true, file3());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, startsWith("required", "ff"), true).eval(FILE_4);
+    shouldRead = shouldRead(SCHEMA, startsWith("required", "ff"), true, file4());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, startsWith("required", "aB"), true).eval(FILE_2);
+    shouldRead = shouldRead(SCHEMA, startsWith("required", "aB"), true, file2());
     assertThat(shouldRead).as("Should not read: range doesn't match").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, startsWith("required", "dWX"), true).eval(FILE_2);
+    shouldRead = shouldRead(SCHEMA, startsWith("required", "dWX"), true, file2());
     assertThat(shouldRead).as("Should not read: range doesn't match").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, startsWith("required", "5"), true).eval(FILE_3);
+    shouldRead = shouldRead(SCHEMA, startsWith("required", "5"), true, file3());
     assertThat(shouldRead).as("Should not read: range doesn't match").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, startsWith("required", "3str3x"), true).eval(FILE_3);
+    shouldRead = shouldRead(SCHEMA, startsWith("required", "3str3x"), true, file3());
     assertThat(shouldRead).as("Should not read: range doesn't match").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, startsWith("some_empty", "房东整租霍"), true).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, startsWith("some_empty", "房东整租霍"), true, file());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, startsWith("all_nulls", ""), true).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, startsWith("all_nulls", ""), true, file());
     assertThat(shouldRead).as("Should not read: range doesn't match").isFalse();
 
     String aboveMax = UnicodeUtil.truncateStringMax(Literal.of("イロハニホヘト"), 4).value().toString();
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, startsWith("required", aboveMax), true).eval(FILE_4);
+    shouldRead = shouldRead(SCHEMA, startsWith("required", aboveMax), true, file4());
     assertThat(shouldRead).as("Should not read: range doesn't match").isFalse();
   }
 
   @Test
   public void testStringNotStartsWith() {
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notStartsWith("required", "a"), true).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, notStartsWith("required", "a"), true, file());
     assertThat(shouldRead).as("Should read: no stats").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notStartsWith("required", "a"), true).eval(FILE_2);
+    shouldRead = shouldRead(SCHEMA, notStartsWith("required", "a"), true, file2());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notStartsWith("required", "aa"), true).eval(FILE_2);
+    shouldRead = shouldRead(SCHEMA, notStartsWith("required", "aa"), true, file2());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notStartsWith("required", "aaa"), true).eval(FILE_2);
+    shouldRead = shouldRead(SCHEMA, notStartsWith("required", "aaa"), true, file2());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notStartsWith("required", "1s"), true).eval(FILE_3);
+    shouldRead = shouldRead(SCHEMA, notStartsWith("required", "1s"), true, file3());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notStartsWith("required", "1str1x"), true)
-            .eval(FILE_3);
+    shouldRead = shouldRead(SCHEMA, notStartsWith("required", "1str1x"), true, file3());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notStartsWith("required", "ff"), true).eval(FILE_4);
+    shouldRead = shouldRead(SCHEMA, notStartsWith("required", "ff"), true, file4());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notStartsWith("required", "aB"), true).eval(FILE_2);
+    shouldRead = shouldRead(SCHEMA, notStartsWith("required", "aB"), true, file2());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notStartsWith("required", "dWX"), true).eval(FILE_2);
+    shouldRead = shouldRead(SCHEMA, notStartsWith("required", "dWX"), true, file2());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notStartsWith("required", "5"), true).eval(FILE_3);
+    shouldRead = shouldRead(SCHEMA, notStartsWith("required", "5"), true, file3());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notStartsWith("required", "3str3x"), true)
-            .eval(FILE_3);
+    shouldRead = shouldRead(SCHEMA, notStartsWith("required", "3str3x"), true, file3());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
     String aboveMax = UnicodeUtil.truncateStringMax(Literal.of("イロハニホヘト"), 4).value().toString();
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notStartsWith("required", aboveMax), true)
-            .eval(FILE_4);
+    shouldRead = shouldRead(SCHEMA, notStartsWith("required", aboveMax), true, file4());
     assertThat(shouldRead).as("Should read: range matches").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notStartsWith("required", "abc"), true).eval(FILE_5);
+    shouldRead = shouldRead(SCHEMA, notStartsWith("required", "abc"), true, file5());
     assertThat(shouldRead).as("Should not read: all strings start with prefix").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notStartsWith("required", "abcd"), true).eval(FILE_5);
+    shouldRead = shouldRead(SCHEMA, notStartsWith("required", "abcd"), true, file5());
     assertThat(shouldRead).as("Should not read: lower shorter than prefix, cannot match").isTrue();
   }
 
   @Test
   public void testIntegerIn() {
     boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, in("id", INT_MIN_VALUE - 25, INT_MIN_VALUE - 24))
-            .eval(FILE);
+        shouldRead(SCHEMA, in("id", INT_MIN_VALUE - 25, INT_MIN_VALUE - 24), file());
     assertThat(shouldRead).as("Should not read: id below lower bound (5 < 30, 6 < 30)").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, in("id", INT_MIN_VALUE - 2, INT_MIN_VALUE - 1))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, in("id", INT_MIN_VALUE - 2, INT_MIN_VALUE - 1), file());
     assertThat(shouldRead).as("Should not read: id below lower bound (28 < 30, 29 < 30)").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, in("id", INT_MIN_VALUE - 1, INT_MIN_VALUE))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, in("id", INT_MIN_VALUE - 1, INT_MIN_VALUE), file());
     assertThat(shouldRead).as("Should read: id equal to lower bound (30 == 30)").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, in("id", INT_MAX_VALUE - 4, INT_MAX_VALUE - 3))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, in("id", INT_MAX_VALUE - 4, INT_MAX_VALUE - 3), file());
     assertThat(shouldRead)
         .as("Should read: id between lower and upper bounds (30 < 75 < 79, 30 < 76 < 79)")
         .isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, in("id", INT_MAX_VALUE, INT_MAX_VALUE + 1))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, in("id", INT_MAX_VALUE, INT_MAX_VALUE + 1), file());
     assertThat(shouldRead).as("Should read: id equal to upper bound (79 == 79)").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, in("id", INT_MAX_VALUE + 1, INT_MAX_VALUE + 2))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, in("id", INT_MAX_VALUE + 1, INT_MAX_VALUE + 2), file());
     assertThat(shouldRead).as("Should not read: id above upper bound (80 > 79, 81 > 79)").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, in("id", INT_MAX_VALUE + 6, INT_MAX_VALUE + 7))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, in("id", INT_MAX_VALUE + 6, INT_MAX_VALUE + 7), file());
     assertThat(shouldRead).as("Should not read: id above upper bound (85 > 79, 86 > 79)").isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, in("all_nulls", "abc", "def")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, in("all_nulls", "abc", "def"), file());
     assertThat(shouldRead).as("Should skip: in on all nulls column").isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, in("some_nulls", "abc", "def")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, in("some_nulls", "abc", "def"), file());
     assertThat(shouldRead).as("Should read: in on some nulls column").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, in("no_nulls", "abc", "def")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, in("no_nulls", "abc", "def"), file());
     assertThat(shouldRead).as("Should read: in on no nulls column").isTrue();
 
     // should read as the number of elements in the in expression is too big
@@ -881,131 +945,97 @@ public class TestInclusiveMetricsEvaluator {
     for (int id = -400; id <= 0; id++) {
       ids.add(id);
     }
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, in("id", ids)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, in("id", ids), file());
     assertThat(shouldRead).as("Should read: large in expression").isTrue();
   }
 
   @Test
   public void testIntegerNotIn() {
     boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notIn("id", INT_MIN_VALUE - 25, INT_MIN_VALUE - 24))
-            .eval(FILE);
+        shouldRead(SCHEMA, notIn("id", INT_MIN_VALUE - 25, INT_MIN_VALUE - 24), file());
     assertThat(shouldRead).as("Should read: id below lower bound (5 < 30, 6 < 30)").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notIn("id", INT_MIN_VALUE - 2, INT_MIN_VALUE - 1))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notIn("id", INT_MIN_VALUE - 2, INT_MIN_VALUE - 1), file());
     assertThat(shouldRead).as("Should read: id below lower bound (28 < 30, 29 < 30)").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notIn("id", INT_MIN_VALUE - 1, INT_MIN_VALUE))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notIn("id", INT_MIN_VALUE - 1, INT_MIN_VALUE), file());
     assertThat(shouldRead).as("Should read: id equal to lower bound (30 == 30)").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notIn("id", INT_MAX_VALUE - 4, INT_MAX_VALUE - 3))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notIn("id", INT_MAX_VALUE - 4, INT_MAX_VALUE - 3), file());
     assertThat(shouldRead)
         .as("Should read: id between lower and upper bounds (30 < 75 < 79, 30 < 76 < 79)")
         .isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notIn("id", INT_MAX_VALUE, INT_MAX_VALUE + 1))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notIn("id", INT_MAX_VALUE, INT_MAX_VALUE + 1), file());
     assertThat(shouldRead).as("Should read: id equal to upper bound (79 == 79)").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notIn("id", INT_MAX_VALUE + 1, INT_MAX_VALUE + 2))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notIn("id", INT_MAX_VALUE + 1, INT_MAX_VALUE + 2), file());
     assertThat(shouldRead).as("Should read: id above upper bound (80 > 79, 81 > 79)").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notIn("id", INT_MAX_VALUE + 6, INT_MAX_VALUE + 7))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notIn("id", INT_MAX_VALUE + 6, INT_MAX_VALUE + 7), file());
     assertThat(shouldRead).as("Should read: id above upper bound (85 > 79, 86 > 79)").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notIn("all_nulls", "abc", "def")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notIn("all_nulls", "abc", "def"), file());
     assertThat(shouldRead).as("Should read: notIn on all nulls column").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notIn("some_nulls", "abc", "def")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notIn("some_nulls", "abc", "def"), file());
     assertThat(shouldRead).as("Should read: notIn on some nulls column").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notIn("no_nulls", "abc", "def")).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notIn("no_nulls", "abc", "def"), file());
     assertThat(shouldRead).as("Should read: notIn on no nulls column").isTrue();
   }
 
   @Test
   public void testIsNullInNestedStruct() {
     // read required_address and its nested fields
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(NESTED_SCHEMA, isNull("required_address")).eval(FILE_6);
+    boolean shouldRead = shouldRead(NESTED_SCHEMA, isNull("required_address"), file6());
     assertThat(shouldRead).as("Should not read: required_address is required").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(NESTED_SCHEMA, isNull("required_address.required_street1"))
-            .eval(FILE_6);
+    shouldRead = shouldRead(NESTED_SCHEMA, isNull("required_address.required_street1"), file6());
     assertThat(shouldRead)
         .as("Should not read: required_address.required_street1 is required")
         .isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(NESTED_SCHEMA, isNull("required_address.optional_street1"))
-            .eval(FILE_6);
+    shouldRead = shouldRead(NESTED_SCHEMA, isNull("required_address.optional_street1"), file6());
     assertThat(shouldRead)
         .as("Should read: required_address.optional_street1 is optional")
         .isTrue();
 
     // read optional_address and its nested fields
-    shouldRead =
-        new InclusiveMetricsEvaluator(NESTED_SCHEMA, isNull("optional_address")).eval(FILE_6);
+    shouldRead = shouldRead(NESTED_SCHEMA, isNull("optional_address"), file6());
     assertThat(shouldRead).as("Should read: optional_address is optional").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(NESTED_SCHEMA, isNull("optional_address.required_street2"))
-            .eval(FILE_6);
+    shouldRead = shouldRead(NESTED_SCHEMA, isNull("optional_address.required_street2"), file6());
     assertThat(shouldRead).as("Should read: optional_address is optional").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(NESTED_SCHEMA, isNull("optional_address.optional_street2"))
-            .eval(FILE_6);
+    shouldRead = shouldRead(NESTED_SCHEMA, isNull("optional_address.optional_street2"), file6());
     assertThat(shouldRead).as("Should read: optional_address is optional").isTrue();
   }
 
   @Test
   public void testNotNullInNestedStruct() {
     // read required_address and its nested fields
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(NESTED_SCHEMA, notNull("required_address")).eval(FILE_6);
+    boolean shouldRead = shouldRead(NESTED_SCHEMA, notNull("required_address"), file6());
     assertThat(shouldRead).as("Should read: required_address is required").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(NESTED_SCHEMA, notNull("required_address.required_street1"))
-            .eval(FILE_6);
+    shouldRead = shouldRead(NESTED_SCHEMA, notNull("required_address.required_street1"), file6());
     assertThat(shouldRead)
         .as("Should read: required_address.required_street1 is required")
         .isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(NESTED_SCHEMA, notNull("required_address.optional_street1"))
-            .eval(FILE_6);
+    shouldRead = shouldRead(NESTED_SCHEMA, notNull("required_address.optional_street1"), file6());
     assertThat(shouldRead)
         .as("Should not read: required_address.optional_street1 is optional")
         .isFalse();
 
     // read optional_address and its nested fields
-    shouldRead =
-        new InclusiveMetricsEvaluator(NESTED_SCHEMA, notNull("optional_address")).eval(FILE_6);
+    shouldRead = shouldRead(NESTED_SCHEMA, notNull("optional_address"), file6());
+    assertThat(shouldRead).as("Should read: metrics are not tracked for structs").isTrue();
+
+    shouldRead = shouldRead(NESTED_SCHEMA, notNull("optional_address.required_street2"), file6());
     assertThat(shouldRead).as("Should not read: optional_address is optional").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(NESTED_SCHEMA, notNull("optional_address.required_street2"))
-            .eval(FILE_6);
-    assertThat(shouldRead).as("Should not read: optional_address is optional").isFalse();
-
-    shouldRead =
-        new InclusiveMetricsEvaluator(NESTED_SCHEMA, notNull("optional_address.optional_street2"))
-            .eval(FILE_6);
+    shouldRead = shouldRead(NESTED_SCHEMA, notNull("optional_address.optional_street2"), file6());
     assertThat(shouldRead)
         .as("Should not read: optional_address.optional_street2 is optional")
         .isFalse();
@@ -1013,310 +1043,160 @@ public class TestInclusiveMetricsEvaluator {
 
   @Test
   public void testNotEqSingleValueWithoutNaN() {
-    Schema schema = new Schema(required(1, "f", Types.FloatType.get()));
-    Map<Integer, ByteBuffer> bound = ImmutableMap.of(1, toByteBuffer(Types.FloatType.get(), 1.0f));
-    DataFile singleValueFile =
-        new TestDataFile(
-            "single_value_file.avro",
-            Row.of(),
-            10,
-            ImmutableMap.of(1, 10L),
-            ImmutableMap.of(1, 0L),
-            ImmutableMap.of(1, 0L),
-            bound,
-            bound);
-
-    assertThat(new InclusiveMetricsEvaluator(schema, notEqual("f", 1.0f)).eval(singleValueFile))
+    assertThat(shouldRead(FLOAT_SCHEMA, notEqual("f", 1.0f), singleFloatValueFile()))
         .as("Should skip: file contains no values not equal to 1.0")
         .isFalse();
   }
 
   @Test
   public void testNotEqSingleValueWithNaN() {
-    Schema schema = new Schema(required(1, "f", Types.FloatType.get()));
-    Map<Integer, ByteBuffer> bound = ImmutableMap.of(1, toByteBuffer(Types.FloatType.get(), 1.0f));
-    DataFile singleValueFile =
-        new TestDataFile(
-            "single_value_file.avro",
-            Row.of(),
-            10,
-            ImmutableMap.of(1, 10L),
-            ImmutableMap.of(1, 0L),
-            ImmutableMap.of(1, 1L), // contains a NaN value
-            bound,
-            bound);
-
-    assertThat(new InclusiveMetricsEvaluator(schema, notEqual("f", 1.0f)).eval(singleValueFile))
+    assertThat(shouldRead(FLOAT_SCHEMA, notEqual("f", 1.0f), singleFloatValueFileWithNaN()))
         .as("Should read: file contains a NaN value not equal to 1.0")
         .isTrue();
   }
 
   @Test
   public void testNotEqWithSingleValue() {
-    DataFile rangeOfValues =
-        new TestDataFile(
-            "range_of_values.avro",
-            Row.of(),
-            10,
-            ImmutableMap.of(3, 10L),
-            ImmutableMap.of(3, 0L),
-            ImmutableMap.of(3, 0L),
-            ImmutableMap.of(3, toByteBuffer(StringType.get(), "aaa")),
-            ImmutableMap.of(3, toByteBuffer(StringType.get(), "zzz")));
-
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notEqual("required", "aaa")).eval(rangeOfValues);
+    boolean shouldRead = shouldRead(SCHEMA, notEqual("required", "aaa"), rangeOfValues());
     assertThat(shouldRead)
         .as("Should read: file has range of values, cannot exclude based on literal")
         .isTrue();
 
-    DataFile singleValueFile =
-        new TestDataFile(
-            "single_value.avro",
-            Row.of(),
-            10,
-            ImmutableMap.of(3, 10L),
-            ImmutableMap.of(3, 0L),
-            null,
-            ImmutableMap.of(3, toByteBuffer(StringType.get(), "abc")),
-            ImmutableMap.of(3, toByteBuffer(StringType.get(), "abc")));
-
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notEqual("required", "abc")).eval(singleValueFile);
+    shouldRead = shouldRead(SCHEMA, notEqual("required", "abc"), singleValueFile());
     assertThat(shouldRead)
         .as("Should not read: file contains single value equal to literal")
         .isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notEqual("required", "def")).eval(singleValueFile);
+    shouldRead = shouldRead(SCHEMA, notEqual("required", "def"), singleValueFile());
     assertThat(shouldRead)
         .as("Should read: file contains single value not equal to literal")
         .isTrue();
 
-    DataFile singleValueWithNulls =
-        new TestDataFile(
-            "single_value_nulls.avro",
-            Row.of(),
-            10,
-            ImmutableMap.of(3, 10L),
-            ImmutableMap.of(3, 2L),
-            null,
-            ImmutableMap.of(3, toByteBuffer(StringType.get(), "abc")),
-            ImmutableMap.of(3, toByteBuffer(StringType.get(), "abc")));
-
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notEqual("required", "abc"))
-            .eval(singleValueWithNulls);
+    shouldRead = shouldRead(SCHEMA, notEqual("some_empty", "abc"), singleValueWithNulls());
     assertThat(shouldRead).as("Should read: file has nulls which match != predicate").isTrue();
 
-    DataFile singleValueWithNaN =
-        new TestDataFile(
-            "single_value_nan.avro",
-            Row.of(),
-            10,
-            ImmutableMap.of(9, 10L),
-            ImmutableMap.of(9, 0L),
-            ImmutableMap.of(9, 2L),
-            ImmutableMap.of(9, toByteBuffer(Types.FloatType.get(), 5.0F)),
-            ImmutableMap.of(9, toByteBuffer(Types.FloatType.get(), 5.0F)));
-
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notEqual("no_nans", 5.0F)).eval(singleValueWithNaN);
+    shouldRead = shouldRead(SCHEMA, notEqual("no_nans", 5.0F), singleValueWithNaN());
     assertThat(shouldRead).as("Should read: file has NaN values which match != predicate").isTrue();
 
-    DataFile singleValueNaNBounds =
-        new TestDataFile(
-            "single_value_nan_bounds.avro",
-            Row.of(),
-            10,
-            ImmutableMap.of(9, 10L),
-            ImmutableMap.of(9, 0L),
-            ImmutableMap.of(9, 0L),
-            ImmutableMap.of(9, toByteBuffer(Types.FloatType.get(), Float.NaN)),
-            ImmutableMap.of(9, toByteBuffer(Types.FloatType.get(), Float.NaN)));
-
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notEqual("no_nans", 5.0F)).eval(singleValueNaNBounds);
+    shouldRead = shouldRead(SCHEMA, notEqual("no_nans", 5.0F), singleValueNaNBounds());
     assertThat(shouldRead).as("Should read: bounds are NaN").isTrue();
   }
 
   @Test
   public void testNotInWithSingleValue() {
-    DataFile rangeOfValues =
-        new TestDataFile(
-            "range_of_values.avro",
-            Row.of(),
-            10,
-            ImmutableMap.of(3, 10L),
-            ImmutableMap.of(3, 0L),
-            ImmutableMap.of(3, 0L),
-            ImmutableMap.of(3, toByteBuffer(StringType.get(), "aaa")),
-            ImmutableMap.of(3, toByteBuffer(StringType.get(), "zzz")));
-
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notIn("required", "aaa", "bbb")).eval(rangeOfValues);
+    boolean shouldRead = shouldRead(SCHEMA, notIn("required", "aaa", "bbb"), rangeOfValues());
     assertThat(shouldRead)
         .as("Should read: file has range of values, cannot exclude based on literal")
         .isTrue();
 
-    DataFile singleValueFile =
-        new TestDataFile(
-            "single_value.avro",
-            Row.of(),
-            10,
-            ImmutableMap.of(3, 10L),
-            ImmutableMap.of(3, 0L),
-            ImmutableMap.of(3, 0L),
-            ImmutableMap.of(3, toByteBuffer(StringType.get(), "abc")),
-            ImmutableMap.of(3, toByteBuffer(StringType.get(), "abc")));
-
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notIn("required", "abc", "def"))
-            .eval(singleValueFile);
+    shouldRead = shouldRead(SCHEMA, notIn("required", "abc", "def"), singleValueFile());
     assertThat(shouldRead)
         .as("Should not read: file contains single value in exclusion list")
         .isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notIn("required", "def", "ghi"))
-            .eval(singleValueFile);
+    shouldRead = shouldRead(SCHEMA, notIn("required", "def", "ghi"), singleValueFile());
     assertThat(shouldRead)
         .as("Should read: file contains single value not in exclusion list")
         .isTrue();
 
-    DataFile singleValueWithNulls =
-        new TestDataFile(
-            "single_value_nulls.avro",
-            Row.of(),
-            10,
-            ImmutableMap.of(3, 10L),
-            ImmutableMap.of(3, 2L),
-            ImmutableMap.of(3, 0L),
-            ImmutableMap.of(3, toByteBuffer(StringType.get(), "abc")),
-            ImmutableMap.of(3, toByteBuffer(StringType.get(), "abc")));
-
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notIn("required", "abc", "def"))
-            .eval(singleValueWithNulls);
+    shouldRead = shouldRead(SCHEMA, notIn("some_empty", "abc", "def"), singleValueWithNulls());
     assertThat(shouldRead).as("Should read: file has nulls which match NOT IN predicate").isTrue();
 
-    DataFile singleValueWithNaN =
-        new TestDataFile(
-            "single_value_nan.avro",
-            Row.of(),
-            10,
-            ImmutableMap.of(9, 10L),
-            ImmutableMap.of(9, 0L),
-            ImmutableMap.of(9, 2L),
-            ImmutableMap.of(9, toByteBuffer(Types.FloatType.get(), 5.0F)),
-            ImmutableMap.of(9, toByteBuffer(Types.FloatType.get(), 5.0F)));
-
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notIn("no_nans", 5.0F, 10.0F))
-            .eval(singleValueWithNaN);
+    shouldRead = shouldRead(SCHEMA, notIn("no_nans", 5.0F, 10.0F), singleValueWithNaN());
     assertThat(shouldRead)
         .as("Should read: file has NaN values which match NOT IN predicate")
         .isTrue();
   }
 
   @Test
-  public void testUuidEq() {
+  public void uuidEq() {
     UUID belowMin = UUID.fromString("00000000-0000-0000-0000-000000000000");
-    boolean shouldRead = new InclusiveMetricsEvaluator(SCHEMA, equal("uuid", belowMin)).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, equal("uuid", belowMin), file());
     assertThat(shouldRead).as("Should not read: uuid below lower bound").isFalse();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, equal("uuid", UUID_MIN_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, equal("uuid", UUID_MIN_VALUE), file());
     assertThat(shouldRead).as("Should read: uuid equal to lower bound").isTrue();
 
     UUID between = UUID.fromString("7fffffff-ffff-ffff-7fff-ffffffffffff");
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, equal("uuid", between)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, equal("uuid", between), file());
     assertThat(shouldRead).as("Should read: uuid between lower and upper bounds").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, equal("uuid", UUID_MAX_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, equal("uuid", UUID_MAX_VALUE), file());
     assertThat(shouldRead).as("Should read: uuid equal to upper bound").isTrue();
 
     UUID aboveMax = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, equal("uuid", aboveMax)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, equal("uuid", aboveMax), file());
     assertThat(shouldRead).as("Should not read: uuid above upper bound").isFalse();
   }
 
   @Test
-  public void testUuidLt() {
+  public void uuidLt() {
     // With RFC comparison, belowMin is below the lower bound so no rows can be < belowMin.
     // With signed comparison, UUID_MIN_VALUE.compareTo(belowMin) = -1 (lower < lit),
     // so rows might match. We try both comparators and return true if either matches.
     UUID belowMin = UUID.fromString("00000000-0000-0000-0000-000000000000");
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, lessThan("uuid", belowMin)).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, lessThan("uuid", belowMin), file());
     assertThat(shouldRead)
         .as("Should read: signed UUID fallback finds matches with inverted bounds")
         .isTrue();
 
     // UUID_MIN_VALUE is the lower bound, so no rows can be < UUID_MIN_VALUE.
     // Both RFC and signed comparators agree on this since we're comparing the value to itself.
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, lessThan("uuid", UUID_MIN_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, lessThan("uuid", UUID_MIN_VALUE), file());
     assertThat(shouldRead)
         .as("Should not read: uuid range below lower bound (UUID_MIN is not < UUID_MIN)")
         .isFalse();
 
     UUID justAboveMin = UUID.fromString("00000000-0000-0001-0000-000000000000");
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, lessThan("uuid", justAboveMin)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, lessThan("uuid", justAboveMin), file());
     assertThat(shouldRead).as("Should read: one possible uuid").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, lessThan("uuid", UUID_MAX_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, lessThan("uuid", UUID_MAX_VALUE), file());
     assertThat(shouldRead).as("Should read: uuid between lower and upper bounds").isTrue();
 
     UUID aboveMax = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, lessThan("uuid", aboveMax)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, lessThan("uuid", aboveMax), file());
     assertThat(shouldRead).as("Should read: all uuids in range").isTrue();
   }
 
   @Test
-  public void testUuidLtEq() {
+  public void uuidLtEq() {
     // With RFC comparison, belowMin is below the lower bound so no rows can be <= belowMin.
     // However, we also try signed comparison for backward compatibility, and with signed comparison
     // the bounds are inverted, so rows might match.
     UUID belowMin = UUID.fromString("00000000-0000-0000-0000-000000000000");
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, lessThanOrEqual("uuid", belowMin)).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, lessThanOrEqual("uuid", belowMin), file());
     assertThat(shouldRead)
         .as("Should read: signed UUID fallback may find matches with inverted bounds")
         .isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, lessThanOrEqual("uuid", UUID_MIN_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, lessThanOrEqual("uuid", UUID_MIN_VALUE), file());
     assertThat(shouldRead).as("Should read: one possible uuid").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, lessThanOrEqual("uuid", UUID_MAX_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, lessThanOrEqual("uuid", UUID_MAX_VALUE), file());
     assertThat(shouldRead).as("Should read: all uuids in range").isTrue();
 
     UUID aboveMax = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, lessThanOrEqual("uuid", aboveMax)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, lessThanOrEqual("uuid", aboveMax), file());
     assertThat(shouldRead).as("Should read: all uuids in range").isTrue();
   }
 
   @Test
-  public void testUuidGt() {
+  public void uuidGt() {
     UUID belowMin = UUID.fromString("00000000-0000-0000-0000-000000000000");
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThan("uuid", belowMin)).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, greaterThan("uuid", belowMin), file());
     assertThat(shouldRead).as("Should read: all uuids in range").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThan("uuid", UUID_MIN_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, greaterThan("uuid", UUID_MIN_VALUE), file());
     assertThat(shouldRead).as("Should read: uuid between lower and upper bounds").isTrue();
 
     UUID justBelowMax = UUID.fromString("ffffffff-ffff-fffe-ffff-ffffffffffff");
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThan("uuid", justBelowMax)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, greaterThan("uuid", justBelowMax), file());
     assertThat(shouldRead).as("Should read: one possible uuid").isTrue();
 
     // UUID_MAX_VALUE is the upper bound, so no rows can be > UUID_MAX_VALUE.
     // Both RFC and signed comparators agree on this since we're comparing the value to itself.
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThan("uuid", UUID_MAX_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, greaterThan("uuid", UUID_MAX_VALUE), file());
     assertThat(shouldRead)
         .as("Should not read: uuid range above upper bound (UUID_MAX is not > UUID_MAX)")
         .isFalse();
@@ -1325,105 +1205,92 @@ public class TestInclusiveMetricsEvaluator {
     // With signed comparison, UUID_MAX_VALUE.compareTo(aboveMax) = 1 (upper > lit),
     // so rows might match. We try both comparators and return true if either matches.
     UUID aboveMax = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, greaterThan("uuid", aboveMax)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, greaterThan("uuid", aboveMax), file());
     assertThat(shouldRead)
         .as("Should read: signed UUID fallback finds matches with inverted bounds")
         .isTrue();
   }
 
   @Test
-  public void testUuidGtEq() {
+  public void uuidGtEq() {
     UUID belowMin = UUID.fromString("00000000-0000-0000-0000-000000000000");
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThanOrEqual("uuid", belowMin)).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, greaterThanOrEqual("uuid", belowMin), file());
     assertThat(shouldRead).as("Should read: all uuids in range").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThanOrEqual("uuid", UUID_MIN_VALUE))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, greaterThanOrEqual("uuid", UUID_MIN_VALUE), file());
     assertThat(shouldRead).as("Should read: all uuids in range").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThanOrEqual("uuid", UUID_MAX_VALUE))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, greaterThanOrEqual("uuid", UUID_MAX_VALUE), file());
     assertThat(shouldRead).as("Should read: one possible uuid").isTrue();
 
     // With RFC comparison, aboveMax is above the upper bound so no rows can be >= aboveMax.
     // With signed comparison, UUID_MAX_VALUE.compareTo(aboveMax) = 1 (upper > lit),
     // so rows might match. We try both comparators and return true if either matches.
     UUID aboveMax = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThanOrEqual("uuid", aboveMax)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, greaterThanOrEqual("uuid", aboveMax), file());
     assertThat(shouldRead)
         .as("Should read: signed UUID fallback finds matches with inverted bounds")
         .isTrue();
   }
 
   @Test
-  public void testUuidIn() {
+  public void uuidIn() {
     UUID belowMin1 = UUID.fromString("00000000-0000-0000-0000-000000000000");
     UUID belowMin2 = UUID.fromString("00000000-0000-0000-0000-000000000001");
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, in("uuid", belowMin1, belowMin2)).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, in("uuid", belowMin1, belowMin2), file());
     assertThat(shouldRead).as("Should not read: uuids below lower bound").isFalse();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, in("uuid", belowMin1, UUID_MIN_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, in("uuid", belowMin1, UUID_MIN_VALUE), file());
     assertThat(shouldRead).as("Should read: uuid equal to lower bound").isTrue();
 
     UUID middle1 = UUID.fromString("7fffffff-ffff-ffff-0000-000000000000");
     UUID middle2 = UUID.fromString("7fffffff-ffff-ffff-ffff-ffffffffffff");
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, in("uuid", middle1, middle2)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, in("uuid", middle1, middle2), file());
     assertThat(shouldRead).as("Should read: uuids between lower and upper bounds").isTrue();
 
     UUID aboveMax = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, in("uuid", UUID_MAX_VALUE, aboveMax)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, in("uuid", UUID_MAX_VALUE, aboveMax), file());
     assertThat(shouldRead).as("Should read: uuid equal to upper bound").isTrue();
 
     UUID aboveMax2 = UUID.fromString("ffffffff-ffff-ffff-ffff-fffffffffffe");
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, in("uuid", aboveMax, aboveMax2)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, in("uuid", aboveMax, aboveMax2), file());
     assertThat(shouldRead).as("Should not read: uuids above upper bound").isFalse();
   }
 
   @Test
-  public void testUuidNotEq() {
+  public void uuidNotEq() {
     UUID belowMin = UUID.fromString("00000000-0000-0000-0000-000000000000");
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notEqual("uuid", belowMin)).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, notEqual("uuid", belowMin), file());
     assertThat(shouldRead).as("Should read: notEqual always reads").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notEqual("uuid", UUID_MIN_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notEqual("uuid", UUID_MIN_VALUE), file());
     assertThat(shouldRead).as("Should read: notEqual always reads").isTrue();
 
     UUID middle = UUID.fromString("7fffffff-ffff-ffff-7fff-ffffffffffff");
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notEqual("uuid", middle)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notEqual("uuid", middle), file());
     assertThat(shouldRead).as("Should read: notEqual always reads").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notEqual("uuid", UUID_MAX_VALUE)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notEqual("uuid", UUID_MAX_VALUE), file());
     assertThat(shouldRead).as("Should read: notEqual always reads").isTrue();
 
     UUID aboveMax = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notEqual("uuid", aboveMax)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notEqual("uuid", aboveMax), file());
     assertThat(shouldRead).as("Should read: notEqual always reads").isTrue();
   }
 
   @Test
-  public void testUuidNotIn() {
+  public void uuidNotIn() {
     UUID belowMin1 = UUID.fromString("00000000-0000-0000-0000-000000000000");
     UUID belowMin2 = UUID.fromString("00000000-0000-0000-0000-000000000001");
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notIn("uuid", belowMin1, belowMin2)).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, notIn("uuid", belowMin1, belowMin2), file());
     assertThat(shouldRead).as("Should read: notIn always reads").isTrue();
 
-    shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, notIn("uuid", UUID_MIN_VALUE, UUID_MAX_VALUE))
-            .eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notIn("uuid", UUID_MIN_VALUE, UUID_MAX_VALUE), file());
     assertThat(shouldRead).as("Should read: notIn always reads").isTrue();
 
     UUID middle1 = UUID.fromString("7fffffff-ffff-ffff-0000-000000000000");
     UUID middle2 = UUID.fromString("7fffffff-ffff-ffff-ffff-ffffffffffff");
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, notIn("uuid", middle1, middle2)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, notIn("uuid", middle1, middle2), file());
     assertThat(shouldRead).as("Should read: notIn always reads").isTrue();
   }
 
@@ -1445,60 +1312,55 @@ public class TestInclusiveMetricsEvaluator {
   //   - Legacy signed: 0x80... < 0x20... < 0x40..., so correctly included
 
   @Test
-  public void testLegacyUuidFileEq() {
+  public void legacyUuidFileEq() {
     // 0x20... is between 0x80... and 0x40... in signed order (within the file's actual range).
     // RFC unsigned fails (0x20... < 0x80...), but legacy signed succeeds.
     UUID queryUuid = UUID.fromString("20000000-0000-0000-0000-000000000001");
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, equal("uuid", queryUuid)).eval(LEGACY_UUID_FILE);
+    boolean shouldRead = shouldRead(SCHEMA, equal("uuid", queryUuid), legacyUuidFile());
     assertThat(shouldRead)
         .as("Should read: legacy fallback should find UUID in signed-ordered bounds")
         .isTrue();
   }
 
   @Test
-  public void testLegacyUuidFileLt() {
+  public void legacyUuidFileLt() {
     // In signed order, 0x80... < 0x30..., so the file's min satisfies uuid < 0x30...
     UUID queryUuid = UUID.fromString("30000000-0000-0000-0000-000000000001");
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, lessThan("uuid", queryUuid)).eval(LEGACY_UUID_FILE);
+    boolean shouldRead = shouldRead(SCHEMA, lessThan("uuid", queryUuid), legacyUuidFile());
     assertThat(shouldRead)
         .as("Should read: legacy fallback should find UUIDs less than query in signed order")
         .isTrue();
   }
 
   @Test
-  public void testLegacyUuidFileGt() {
+  public void legacyUuidFileGt() {
     // In signed order, 0x40... > 0x20..., so the file's max satisfies uuid > 0x20...
     UUID queryUuid = UUID.fromString("20000000-0000-0000-0000-000000000001");
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, greaterThan("uuid", queryUuid))
-            .eval(LEGACY_UUID_FILE);
+    boolean shouldRead = shouldRead(SCHEMA, greaterThan("uuid", queryUuid), legacyUuidFile());
     assertThat(shouldRead)
         .as("Should read: legacy fallback should find UUIDs greater than query in signed order")
         .isTrue();
   }
 
   @Test
-  public void testLegacyUuidFileIn() {
+  public void legacyUuidFileIn() {
     // 0x20... and 0x30... are between 0x80... and 0x40... in signed order.
     // RFC unsigned filters them out (both < 0x80...), but legacy signed includes them.
     UUID uuid1 = UUID.fromString("20000000-0000-0000-0000-000000000001");
     UUID uuid2 = UUID.fromString("30000000-0000-0000-0000-000000000001");
-    boolean shouldRead =
-        new InclusiveMetricsEvaluator(SCHEMA, in("uuid", uuid1, uuid2)).eval(LEGACY_UUID_FILE);
+    boolean shouldRead = shouldRead(SCHEMA, in("uuid", uuid1, uuid2), legacyUuidFile());
     assertThat(shouldRead)
         .as("Should read: legacy fallback should find UUIDs in signed-ordered bounds")
         .isTrue();
   }
 
   @Test
-  public void testNonUuidPredicateNoLegacyFallback() {
+  public void nonUuidPredicateNoLegacyFallback() {
     // Non-UUID predicates should not trigger legacy fallback (no performance impact).
-    boolean shouldRead = new InclusiveMetricsEvaluator(SCHEMA, equal("id", 50)).eval(FILE);
+    boolean shouldRead = shouldRead(SCHEMA, equal("id", 50), file());
     assertThat(shouldRead).as("Should read: id 50 is in range [30, 79]").isTrue();
 
-    shouldRead = new InclusiveMetricsEvaluator(SCHEMA, equal("id", 100)).eval(FILE);
+    shouldRead = shouldRead(SCHEMA, equal("id", 100), file());
     assertThat(shouldRead).as("Should not read: id 100 is above range [30, 79]").isFalse();
   }
 }
